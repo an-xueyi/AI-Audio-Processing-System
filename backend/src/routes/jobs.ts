@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { jobCreatedTopic, producer } from "../kafka/producer.js";
 
 const router = Router();
 
@@ -16,7 +17,23 @@ router.post("/", async (req, res) => {
     [originalFileName, inputObjectKey, "PENDING", 0],
   );
 
-  res.status(201).json(result.rows[0]);
+  const job = result.rows[0];
+
+  await producer.send({
+    topic: jobCreatedTopic,
+    messages: [
+      {
+        key: job.id,
+        value: JSON.stringify({
+          jobId: job.id,
+          inputObjectKey: job.input_object_key,
+          originalFileName: job.original_file_name,
+        }),
+      },
+    ],
+  });
+
+  res.status(201).json(job);
 });
 
 router.get("/:id", async (req, res) => {

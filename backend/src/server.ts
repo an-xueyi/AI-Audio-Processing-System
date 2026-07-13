@@ -3,6 +3,7 @@ import cors from "cors";
 import { pool } from "./db.js";
 import jobsRouter from "./routes/jobs.js";
 import uploadsRouter from "./routes/uploads.js";
+import { connectKafkaProducer } from "./kafka/producer.js";
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.get("/db-health", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await connectKafkaProducer();
   console.log(`Backend API running on port ${PORT}`);
 });
