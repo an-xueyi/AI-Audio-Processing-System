@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     input_object_key TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING',
     progress INTEGER NOT NULL DEFAULT 0,
-    result_object_key JSONB,
+    result_object_keys JSONB,
     error_message TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
