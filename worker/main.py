@@ -24,13 +24,20 @@ s3_client = boto3.client(
     endpoint_url=s3_endpoint,
     region_name=s3_region,
     aws_access_key_id=s3_access_key_id,
-    aws_secret_access_key=s3_secret_access_key
+    aws_secret_access_key=s3_secret_access_key,
 )
 
-def update_job_status(job_id: str, status: str, progress: int, result_keys: dict | None = None) -> None:
+
+def update_job_status(
+    job_id: str,
+    status: str,
+    progress: int,
+    result_keys: dict | None = None,
+    error_message: str | None = None,
+) -> None:
     if database_url is None:
         raise RuntimeError("DATABASE_URL is missing")
-    
+
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -39,16 +46,24 @@ def update_job_status(job_id: str, status: str, progress: int, result_keys: dict
                 SET status = %s, 
                     progress = %s,
                     result_object_keys = COALESCE(%s::jsonb, result_object_keys),
+                    error_message = %s,
                     updated_at = NOW()
                 WHERE id = %s
                 """,
-                (status, progress, json.dumps(result_keys) if result_keys else None, job_id)
+                (
+                    status,
+                    progress,
+                    json.dumps(result_keys) if result_keys else None,
+                    error_message,
+                    job_id,
+                ),
             )
+
 
 def upload_mock_results(job_id: str) -> dict:
     if s3_bucket is None:
         raise RuntimeError("S3_BUCKET is missing")
-    
+
     stems = ["vocals", "drums", "bass", "other"]
     result_keys = {}
 
@@ -67,11 +82,14 @@ def upload_mock_results(job_id: str) -> dict:
 
     return result_keys
 
-consumer = Consumer({
-    "bootstrap.servers": kafka_broker,
-    "group.id": "audio-worker",
-    "auto.offset.reset": "earliest"
-})
+
+consumer = Consumer(
+    {
+        "bootstrap.servers": kafka_broker,
+        "group.id": "audio-worker",
+        "auto.offset.reset": "earliest",
+    }
+)
 
 consumer.subscribe([job_created_topic])
 
@@ -86,21 +104,27 @@ try:
 
         if message.error():
             raise KafkaException(message.error())
-        
+
         job = json.loads(message.value().decode("utf-8"))
         job_id = job["jobId"]
 
         print("Received job:")
         print(job)
 
-        update_job_status(job_id, "PROCESSING", 10)
-        print(f"Job {job_id} marked as PROCESSING")
+        try:
+            update_job_status(job_id, "PROCESSING", 10)
+            print(f"Job {job_id} marked as PROCESSING")
 
-        time.sleep(5)
+            time.sleep(5)
 
-        result_keys = upload_mock_results(job_id)
-        update_job_status(job_id, "COMPLETED", 100, result_keys)
-        print(f"Job {job_id} marked as COMPLETED")
+            result_keys = upload_mock_results(job_id)
+            update_job_status(job_id, "COMPLETED", 100, result_keys)
+            print(f"Job {job_id} marked as COMPLETED")
+
+        except Exception as error:
+            error_message = str(error)
+            update_job_status(job_id, "FAILED", 0, error_message=error_message)
+            print(f"Job {job_id} failed: {error_message}")
 
 except KeyboardInterrupt:
     print("Worker stopped by user")
