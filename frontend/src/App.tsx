@@ -21,6 +21,12 @@ type Job = {
   result_object_keys: Record<string, string> | null;
 };
 
+type DownloadUrlsResponse = {
+  jobId: string;
+  downloadUrls: Record<string, string>;
+  expiresInSeconds: number;
+};
+
 function App() {
   const [backendHealth, setBackendHealth] = useState<HealthResponse | null>(
     null,
@@ -29,6 +35,10 @@ function App() {
   const [job, setJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string>("Checking backend...");
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [downloadUrls, setDownloadUrls] = useState<Record<
+    string,
+    string
+  > | null>(null);
 
   useEffect(() => {
     async function checkBackendHealth() {
@@ -63,14 +73,33 @@ function App() {
     return updatedJob;
   }
 
+  async function fetchDownloadUrls(jobId: string) {
+    const response = await fetch(
+      `http://localhost:4000/api/jobs/${jobId}/downloads`,
+    );
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch download URLs");
+    }
+
+    const data = (await response.json()) as DownloadUrlsResponse;
+    setDownloadUrls(data.downloadUrls);
+  }
+
   async function pollJobUntilCompleted(jobId: string) {
     const maxAttempts = 20;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const updatedJob = await fetchJobById(jobId);
 
-      if (updatedJob.status === "COMPLETED" || updatedJob.status === "FAILED") {
-        setMessage(`Job finished with status: ${updatedJob.status}`);
+      if (updatedJob.status === "COMPLETED") {
+        await fetchDownloadUrls(jobId);
+        setMessage("Job completed! Download links are ready.");
+        return;
+      }
+
+      if (updatedJob.status === "FAILED") {
+        setMessage("Job failed.");
         return;
       }
 
@@ -184,6 +213,7 @@ function App() {
           onChange={(event) => {
             setSelectedFile(event.target.files?.[0] ?? null);
             setJob(null);
+            setDownloadUrls(null);
           }}
         />
 
@@ -205,6 +235,21 @@ function App() {
           <p>Status: {job.status}</p>
           <p>Progress: {job.progress}%</p>
           <p>Input Object Key: {job.input_object_key}</p>
+        </section>
+      )}
+
+      {downloadUrls && (
+        <section>
+          <h2>Download Results</h2>
+          <ul>
+            {Object.entries(downloadUrls).map(([stemName, url]) => (
+              <li key={stemName}>
+                <a href={url} target="_blank" rel="noreferrer">
+                  Download {stemName}
+                </a>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
     </main>
