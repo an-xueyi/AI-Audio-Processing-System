@@ -28,6 +28,16 @@ type DownloadUrlsResponse = {
   expiresInSeconds: number;
 };
 
+type JobWebSocketMessage =
+  | {
+      type: "job_update";
+      job: Job;
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
 function App() {
   const [backendHealth, setBackendHealth] = useState<HealthResponse | null>(
     null,
@@ -61,19 +71,6 @@ function App() {
     checkBackendHealth();
   }, []);
 
-  async function fetchJobById(jobId: string) {
-    const response = await fetch(`http://localhost:4000/api/jobs/${jobId}`);
-
-    if (!response.ok) {
-      throw new Error("Failed to fetch job status");
-    }
-
-    const updatedJob = (await response.json()) as Job;
-    setJob(updatedJob);
-
-    return updatedJob;
-  }
-
   async function fetchDownloadUrls(jobId: string) {
     const response = await fetch(
       `http://localhost:4000/api/jobs/${jobId}/downloads`,
@@ -87,34 +84,53 @@ function App() {
     setDownloadUrls(data.downloadUrls);
   }
 
-  async function pollJobUntilCompleted(jobId: string) {
-    const maxAttempts = 20;
+  function connectJobWebSocket(jobId: string) {
+    const socket = new WebSocket(`ws://localhost:4000/ws/jobs?jobId=${jobId}`);
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const updatedJob = await fetchJobById(jobId);
+    socket.onopen = () => {
+      setMessage("Connected to job status updates.");
+    };
 
-      if (updatedJob.status === "COMPLETED") {
-        await fetchDownloadUrls(jobId);
-        setMessage("Job completed! Download links are ready.");
+    socket.onmessage = async (event) => {
+      const message = JSON.parse(event.data) as JobWebSocketMessage;
+
+      if (message.type === "error") {
+        setMessage(message.error);
+        socket.close();
         return;
       }
 
-      if (updatedJob.status === "FAILED") {
+      setJob(message.job);
+
+      if (message.job.status === "COMPLETED") {
+        await fetchDownloadUrls(message.job.id);
+        setMessage("Job completed! Download links are ready.");
+        socket.close();
+        return;
+      }
+
+      if (message.job.status === "FAILED") {
         setMessage(
-          updatedJob.error_message
-            ? `Job failed: ${updatedJob.error_message}`
+          message.job.error_message
+            ? `Job failed: ${message.job.error_message}`
             : "Job failed.",
         );
+        socket.close();
         return;
       }
 
       setMessage(
-        `Job is ${updatedJob.status}. Progress: ${updatedJob.progress}%`,
+        `Job is ${message.job.status}. Progress: ${message.job.progress}%`,
       );
+    };
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    setMessage("Stopped checking job status. You can refresh manually later.");
+    socket.onerror = () => {
+      setMessage("WebSocket connection failed.");
+    };
+
+    socket.onclose = () => {
+      setMessage("WebSocket connection closed.");
+    };
   }
 
   async function handleUploadAndCreateJob() {
@@ -181,7 +197,7 @@ function App() {
       const createdJob = (await jobResponse.json()) as Job;
 
       setJob(createdJob);
-      pollJobUntilCompleted(createdJob.id);
+      connectJobWebSocket(createdJob.id);
       setMessage("Job created. The worker will process it in the background.");
     } catch (error) {
       setMessage(

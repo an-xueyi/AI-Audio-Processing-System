@@ -1,5 +1,7 @@
+import { createServer } from "http";
 import express from "express";
 import cors from "cors";
+import { WebSocket, WebSocketServer } from "ws";
 import { pool } from "./db.js";
 import jobsRouter from "./routes/jobs.js";
 import uploadsRouter from "./routes/uploads.js";
@@ -32,7 +34,82 @@ app.get("/db-health", async (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
+const server = createServer(app);
+
+const jobUpdatesWebSocketServer = new WebSocketServer({
+  server,
+  path: "/ws/jobs",
+});
+
+jobUpdatesWebSocketServer.on("connection", (socket, request) => {
+  const requestUrl = new URL(
+    request.url || "",
+    `http://${request.headers.host}`,
+  );
+  const jobId = requestUrl.searchParams.get("jobId");
+
+  if (!jobId) {
+    socket.send(
+      JSON.stringify({
+        type: "error",
+        error: "jobId query parameter is required",
+      }),
+    );
+    socket.close();
+    return;
+  }
+
+  let previousPayload = "";
+
+  const intervalId = setInterval(async () => {
+    try {
+      const result = await pool.query("SELECT * FROM jobs WHERE id = $1", [
+        jobId,
+      ]);
+
+      if (result.rows.length === 0) {
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            error: "Job not found",
+          }),
+        );
+        socket.close();
+        return;
+      }
+
+      const job = result.rows[0];
+
+      const payload = JSON.stringify({
+        type: "job_update",
+        job,
+      });
+
+      if (payload !== previousPayload && socket.readyState === WebSocket.OPEN) {
+        socket.send(payload);
+        previousPayload = payload;
+      }
+
+      if (job.status === "COMPLETED" || job.status === "FAILED") {
+        clearInterval(intervalId);
+      }
+    } catch (error) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          error: "Failed to fetch job status",
+        }),
+      );
+      socket.close();
+    }
+  }, 1000);
+
+  socket.on("close", () => {
+    clearInterval(intervalId);
+  });
+});
+
+server.listen(PORT, async () => {
   await connectKafkaProducer();
   console.log(`Backend API running on port ${PORT}`);
 });
