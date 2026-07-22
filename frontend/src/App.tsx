@@ -19,6 +19,7 @@ type Job = {
   status: string;
   progress: number;
   result_object_keys: Record<string, string> | null;
+  error_message: string | null;
 };
 
 type DownloadUrlsResponse = {
@@ -99,7 +100,11 @@ function App() {
       }
 
       if (updatedJob.status === "FAILED") {
-        setMessage("Job failed.");
+        setMessage(
+          updatedJob.error_message
+            ? `Job failed: ${updatedJob.error_message}`
+            : "Job failed.",
+        );
         return;
       }
 
@@ -235,6 +240,7 @@ function App() {
           <p>Status: {job.status}</p>
           <p>Progress: {job.progress}%</p>
           <p>Input Object Key: {job.input_object_key}</p>
+          {job.error_message && <p>Error: {job.error_message}</p>}
         </section>
       )}
 
