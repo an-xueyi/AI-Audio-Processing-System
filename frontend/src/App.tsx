@@ -208,26 +208,41 @@ function App() {
   }
 
   return (
-    <main>
-      <h1>AI Audio Processing System</h1>
-
-      <section>
-        <h2>Backend Status</h2>
-
-        {backendHealth ? (
-          <p>
-            Backend is connected: {backendHealth.service} is{" "}
-            {backendHealth.status}
-          </p>
-        ) : (
-          <p>{message}</p>
-        )}
+    <main className="app-shell">
+      <section className="hero-section">
+        <p className="eyebrow">Distributed AI Audio Processing System</p>
+        <h1>Upload audio. Track processing. Download separated stems.</h1>
+        <p className="hero-copy">
+          A full-stack audio processing pipeline using React, Express,
+          PostgreSQL, MinIO, Kafka, WebSockets, and a Python worker.
+        </p>
       </section>
 
-      <section>
-        <h2>Upload Audio</h2>
+      <section className="panel">
+        <div className="section-header">
+          <h2>System Status</h2>
+          <span
+            className={
+              backendHealth ? "status-pill online" : "status-pill offline"
+            }
+          >
+            {backendHealth ? "Connected" : "Disconnected"}
+          </span>
+        </div>
+        <p>
+          {backendHealth
+            ? `${backendHealth.service} is ${backendHealth.status}`
+            : message}
+        </p>
+      </section>
+
+      <section className="panel">
+        <div className="section-header">
+          <h2>Upload Audio</h2>
+        </div>
 
         <input
+          className="file-input"
           type="file"
           accept="audio/*"
           onChange={(event) => {
@@ -238,6 +253,7 @@ function App() {
         />
 
         <button
+          className="primary-button"
           type="button"
           onClick={handleUploadAndCreateJob}
           disabled={!selectedFile || isUploading}
@@ -245,24 +261,42 @@ function App() {
           {isUploading ? "Uploading..." : "Upload and Create Job"}
         </button>
 
-        <p>{message}</p>
+        <p className="message">{message}</p>
       </section>
 
       {job && (
-        <section>
-          <h2>Created Job</h2>
-          <p>Job ID: {job.id}</p>
-          <p>Status: {job.status}</p>
-          <p>Progress: {job.progress}%</p>
-          <p>Input Object Key: {job.input_object_key}</p>
-          {job.error_message && <p>Error: {job.error_message}</p>}
+        <section className="panel">
+          <div className="section-header">
+            <h2>Created Job</h2>
+            <span className="status-pill">{job.status}</span>
+          </div>
+
+          <div className="job-grid">
+            <p>
+              <strong>Job ID:</strong> {job.id}
+            </p>
+            <p>
+              <strong>Progress:</strong> {job.progress}%
+            </p>
+            <p>
+              <strong>Input Object Key:</strong> {job.input_object_key}
+            </p>
+            {job.error_message && (
+              <p>
+                <strong>Error:</strong> {job.error_message}
+              </p>
+            )}
+          </div>
         </section>
       )}
 
       {downloadUrls && (
-        <section>
-          <h2>Download Results</h2>
-          <ul>
+        <section className="panel">
+          <div className="section-header">
+            <h2>Download Results</h2>
+          </div>
+
+          <ul className="download-list">
             {Object.entries(downloadUrls).map(([stemName, url]) => (
               <li key={stemName}>
                 <a href={url} target="_blank" rel="noreferrer">
