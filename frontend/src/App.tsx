@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_BASE_URL, WS_BASE_URL } from "./config";
 
 type HealthResponse = {
   status: string;
@@ -54,7 +55,7 @@ function App() {
   useEffect(() => {
     async function checkBackendHealth() {
       try {
-        const response = await fetch("http://localhost:4000/health");
+        const response = await fetch(`${API_BASE_URL}/health`);
 
         if (!response.ok) {
           throw new Error("Backend health check failed");
@@ -72,9 +73,7 @@ function App() {
   }, []);
 
   async function fetchDownloadUrls(jobId: string) {
-    const response = await fetch(
-      `http://localhost:4000/api/jobs/${jobId}/downloads`,
-    );
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/downloads`);
 
     if (!response.ok) {
       throw new Error("Failed to fetch download URLs");
@@ -85,7 +84,7 @@ function App() {
   }
 
   function connectJobWebSocket(jobId: string) {
-    const socket = new WebSocket(`ws://localhost:4000/ws/jobs?jobId=${jobId}`);
+    const socket = new WebSocket(`${WS_BASE_URL}/ws/jobs?jobId=${jobId}`);
 
     socket.onopen = () => {
       setMessage("Connected to job status updates.");
@@ -144,7 +143,7 @@ function App() {
       setMessage("Requesting presigned URL...");
 
       const presignResponse = await fetch(
-        "http://localhost:4000/api/uploads/presign",
+        `${API_BASE_URL}/api/uploads/presign`,
         {
           method: "POST",
           headers: {
@@ -179,7 +178,7 @@ function App() {
 
       setMessage("Creating processing job...");
 
-      const jobResponse = await fetch("http://localhost:4000/api/jobs", {
+      const jobResponse = await fetch(`${API_BASE_URL}/api/jobs`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
