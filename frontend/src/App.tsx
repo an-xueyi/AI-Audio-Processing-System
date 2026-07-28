@@ -29,6 +29,10 @@ type DownloadUrlsResponse = {
   expiresInSeconds: number;
 };
 
+type ApiErrorResponse = {
+  error?: string;
+};
+
 type JobWebSocketMessage =
   | {
       type: "job_update";
@@ -51,6 +55,15 @@ function App() {
     string,
     string
   > | null>(null);
+
+  async function getApiErrorMessage(response: Response, fallback: string) {
+    try {
+      const data = (await response.json()) as ApiErrorResponse;
+      return data.error || fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
 
   useEffect(() => {
     async function checkBackendHealth() {
@@ -76,7 +89,9 @@ function App() {
     const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/downloads`);
 
     if (!response.ok) {
-      throw new Error("Failed to fetch download URLs");
+      throw new Error(
+        await getApiErrorMessage(response, "Failed to fetch download URLs"),
+      );
     }
 
     const data = (await response.json()) as DownloadUrlsResponse;
@@ -85,6 +100,8 @@ function App() {
 
   function connectJobWebSocket(jobId: string) {
     const socket = new WebSocket(`${WS_BASE_URL}/ws/jobs?jobId=${jobId}`);
+
+    let shouldShowClosedMessage = true;
 
     socket.onopen = () => {
       setMessage("Connected to job status updates.");
@@ -95,6 +112,7 @@ function App() {
 
       if (message.type === "error") {
         setMessage(message.error);
+        shouldShowClosedMessage = false;
         socket.close();
         return;
       }
@@ -104,6 +122,7 @@ function App() {
       if (message.job.status === "COMPLETED") {
         await fetchDownloadUrls(message.job.id);
         setMessage("Job completed! Download links are ready.");
+        shouldShowClosedMessage = false;
         socket.close();
         return;
       }
@@ -114,6 +133,7 @@ function App() {
             ? `Job failed: ${message.job.error_message}`
             : "Job failed.",
         );
+        shouldShowClosedMessage = false;
         socket.close();
         return;
       }
@@ -128,7 +148,9 @@ function App() {
     };
 
     socket.onclose = () => {
-      setMessage("WebSocket connection closed.");
+      if (shouldShowClosedMessage) {
+        setMessage("WebSocket connection closed.");
+      }
     };
   }
 
@@ -157,7 +179,9 @@ function App() {
       );
 
       if (!presignResponse.ok) {
-        throw new Error("Failed to get upload URL");
+        throw new Error(
+          await getApiErrorMessage(presignResponse, "Failed to get upload URL"),
+        );
       }
 
       const presignData = (await presignResponse.json()) as PresignResponse;
@@ -190,7 +214,9 @@ function App() {
       });
 
       if (!jobResponse.ok) {
-        throw new Error("Failed to create job");
+        throw new Error(
+          await getApiErrorMessage(jobResponse, "Failed to create job"),
+        );
       }
 
       const createdJob = (await jobResponse.json()) as Job;
@@ -246,9 +272,15 @@ function App() {
           type="file"
           accept="audio/*"
           onChange={(event) => {
-            setSelectedFile(event.target.files?.[0] ?? null);
+            const file = event.target.files?.[0] ?? null;
+            setSelectedFile(file);
             setJob(null);
             setDownloadUrls(null);
+            setMessage(
+              file
+                ? `Selected file: ${file.name}`
+                : "Please choose an audio file",
+            );
           }}
         />
 

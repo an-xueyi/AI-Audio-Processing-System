@@ -120,6 +120,10 @@ h2 {
   color: #526179;
 }
 
+.message.error {
+  color: #b91c1c;
+}
+
 .job-grid {
   display: grid;
   gap: 10px;
