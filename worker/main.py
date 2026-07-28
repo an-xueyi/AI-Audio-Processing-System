@@ -3,6 +3,8 @@ import os
 import time
 import psycopg
 import boto3
+import shutil
+from pathlib import Path
 
 from confluent_kafka import Consumer, KafkaException
 from dotenv import load_dotenv
@@ -26,6 +28,18 @@ s3_client = boto3.client(
     aws_access_key_id=s3_access_key_id,
     aws_secret_access_key=s3_secret_access_key,
 )
+
+work_dir = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
+
+
+def create_job_workspace(job_id: str) -> Path:
+    job_workspace = work_dir / job_id
+
+    if job_workspace.exists():
+        shutil.rmtree(job_workspace)
+
+    job_workspace.mkdir(parents=True, exist_ok=True)
+    return job_workspace
 
 
 def update_job_status(
@@ -60,7 +74,19 @@ def update_job_status(
             )
 
 
-def upload_mock_results(job_id: str) -> dict:
+def download_input_file(input_object_key: str, job_workspace: Path) -> Path:
+    if s3_bucket is None:
+        raise RuntimeError("S3_BUCKET is missing")
+
+    input_file_name = Path(input_object_key).name
+    input_path = job_workspace / input_file_name
+
+    s3_client.download_file(s3_bucket, input_object_key, str(input_path))
+
+    return input_path
+
+
+def upload_mock_results(job_id: str, input_path: Path) -> dict:
     if s3_bucket is None:
         raise RuntimeError("S3_BUCKET is missing")
 
@@ -69,7 +95,11 @@ def upload_mock_results(job_id: str) -> dict:
 
     for stem in stems:
         object_key = f"results/{job_id}/{stem}.txt"
-        body = f"Mock {stem} stem for job {job_id}\n"
+        body = (
+            f"Mock {stem} stem for job {job_id}\n"
+            f"Source file: {input_path.name}\n"
+            f"Source size: {input_path.stat().st_size} bytes\n"
+        )
 
         s3_client.put_object(
             Bucket=s3_bucket,
@@ -111,13 +141,21 @@ try:
         print("Received job:")
         print(job)
 
+        input_object_key = job["inputObjectKey"]
+        job_workspace = create_job_workspace(job_id)
+
         try:
             update_job_status(job_id, "PROCESSING", 10)
             print(f"Job {job_id} marked as PROCESSING")
 
+            input_path = download_input_file(input_object_key, job_workspace)
+            print(f"Downloaded input file to {input_path}")
+
+            update_job_status(job_id, "PROCESSING", 40)
+
             time.sleep(5)
 
-            result_keys = upload_mock_results(job_id)
+            result_keys = upload_mock_results(job_id, input_path)
             update_job_status(job_id, "COMPLETED", 100, result_keys)
             print(f"Job {job_id} marked as COMPLETED")
 
@@ -125,6 +163,10 @@ try:
             error_message = str(error)
             update_job_status(job_id, "FAILED", 0, error_message=error_message)
             print(f"Job {job_id} failed: {error_message}")
+
+        finally:
+            shutil.rmtree(job_workspace, ignore_errors=True)
+
 
 except KeyboardInterrupt:
     print("Worker stopped by user")
