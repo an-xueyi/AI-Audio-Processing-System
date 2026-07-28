@@ -18,7 +18,7 @@ services:
     depends_on:
       - postgres
       - minio
-      - kafka
+      - kafka-init
     restart: unless-stopped
 
   worker:
@@ -37,7 +37,7 @@ services:
     depends_on:
       - postgres
       - minio
-      - kafka
+      - kafka-init
     restart: unless-stopped
 
   postgres:
@@ -85,6 +85,30 @@ services:
       - "9092:9092"
     volumes:
       - kafka_data:/tmp/kraft-combined-logs
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    container_name: audio-kafka-init
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "
+      until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list;
+        do echo 'Waiting for Kafka to be ready...';
+        sleep 2;
+      done;
+
+      /opt/kafka/bin/kafka-topics.sh
+      --bootstrap-server kafka:29092
+      --create
+      --if-not-exists
+      --topic audio.jobs.created
+      --partitions 1
+      --replication-factor 1;
+
+      echo 'Kafka topic audio.jobs.created is ready.';
+      "
 
 volumes:
   postgres_data:
