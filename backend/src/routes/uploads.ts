@@ -8,13 +8,28 @@ const router = Router();
 
 router.post("/presign", async (req, res) => {
   const { fileName, contentType } = req.body;
-  if (!fileName || !contentType) {
+  if (typeof fileName !== "string" || fileName.trim().length === 0) {
     return res.status(400).json({
-      error: "fileName and contentType are required",
+      error: "fileName is required",
     });
   }
 
-  const safeFileName = fileName.replaceAll("/", "-");
+  if (typeof contentType !== "string" || contentType.trim().length === 0) {
+    return res.status(400).json({
+      error: "contentType is required",
+    });
+  }
+
+  if (!contentType.startsWith("audio/")) {
+    return res.status(400).json({
+      error: "Only audio uploads are allowed",
+    });
+  }
+
+  const safeFileName = fileName
+    .trim()
+    .replaceAll("/", "-")
+    .replaceAll("\\", "-");
   const objectKey = `uploads/${randomUUID()}-${safeFileName}`;
 
   const command = new PutObjectCommand({

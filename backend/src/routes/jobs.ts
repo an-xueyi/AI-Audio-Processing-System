@@ -6,12 +6,33 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bucketName, s3Client } from "../storage/s3.js";
 
 const router = Router();
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 router.post("/", async (req, res) => {
   const { originalFileName, inputObjectKey } = req.body;
-  if (!originalFileName || !inputObjectKey) {
+
+  if (
+    typeof originalFileName !== "string" ||
+    originalFileName.trim().length === 0
+  ) {
     return res.status(400).json({
-      error: "originalFileName and inputObjectKey are required",
+      error: "originalFileName is required",
+    });
+  }
+
+  if (
+    typeof inputObjectKey !== "string" ||
+    inputObjectKey.trim().length === 0
+  ) {
+    return res.status(400).json({
+      error: "inputObjectKey is required",
+    });
+  }
+
+  if (!inputObjectKey.startsWith("uploads/")) {
+    return res.status(400).json({
+      error: "inputObjectKey must start with uploads/",
     });
   }
 
@@ -44,6 +65,12 @@ type ResultObjectKeys = Record<string, string>;
 router.get("/:id/downloads", async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!uuidPattern.test(id)) {
+      return res.status(400).json({
+        error: "Invalid job id",
+      });
+    }
 
     const result = await pool.query(
       `SELECT id, status, progress, result_object_keys 
@@ -95,6 +122,13 @@ router.get("/:id/downloads", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
+
+  if (!uuidPattern.test(id)) {
+    return res.status(400).json({
+      error: "Invalid job id",
+    });
+  }
+
   const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
 
   if (result.rows.length === 0) {

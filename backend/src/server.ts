@@ -6,6 +6,7 @@ import { pool } from "./db.js";
 import jobsRouter from "./routes/jobs.js";
 import uploadsRouter from "./routes/uploads.js";
 import { connectKafkaProducer } from "./kafka/producer.js";
+import type { ErrorRequestHandler, RequestHandler } from "express";
 
 const app = express();
 
@@ -33,6 +34,24 @@ app.get("/db-health", async (req, res) => {
     });
   }
 });
+
+const notFoundHandler: RequestHandler = (req, res) => {
+  res.status(404).json({
+    error: "Route not found",
+    path: req.originalUrl,
+  });
+};
+
+const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
+  console.error(error);
+
+  res.status(500).json({
+    error: "Internal server error",
+  });
+};
+
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 const server = createServer(app);
 
