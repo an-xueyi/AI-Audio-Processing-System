@@ -2,8 +2,6 @@
 
 A full-stack distributed audio processing system that uploads audio files to S3-compatible object storage, creates asynchronous processing jobs, sends job events through Kafka, processes jobs in a Python worker, and streams job status updates to the frontend through WebSockets.
 
-This project is currently built as a local production-style prototype. The worker generates mock result files for now; the next major ML upgrade is replacing the mock processing step with Demucs-based stem separation.
-
 ## Tech Stack
 
 - Frontend: React, TypeScript, Vite
@@ -70,109 +68,64 @@ Frontend requests temporary download URLs when the job is complete.
 
 ## Local Setup
 
-### 1. Start Infrastructure
+### 1. Start The Docker Services
 
 From the project root:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-This starts PostgreSQL, MinIO, and Kafka in the background.
+This starts the local backend system:
 
-Check running containers:
+- Express backend API
+- Python worker
+- PostgreSQL database
+- MinIO object storage
+- Kafka message broker
+- Kafka topic initialization container
 
-```bash
-docker ps
-```
-
-You should see:
+The `kafka-init` container automatically creates the Kafka topic:
 
 ```text
+audio.jobs.created
+```
+
+### 2. Check Running Containers
+
+```bash
+docker compose ps
+```
+
+You should see services like:
+
+```text
+audio-backend
+audio-worker
 audio-postgres
 audio-minio
 audio-kafka
 ```
 
-### 2. Create Kafka Topic
+The `audio-kafka-init` container may show as exited. That is expected because it only runs once to create the Kafka topic.
 
-Kafka needs the `audio.jobs.created` topic before the worker can consume job messages.
-
-```bash
-docker exec audio-kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
-  --create \
-  --if-not-exists \
-  --topic audio.jobs.created \
-  --partitions 1 \
-  --replication-factor 1
-```
-
-Verify the topic exists:
-
-```bash
-docker exec audio-kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 \
-  --list
-```
-
-You should see:
-
-```text
-audio.jobs.created
-```
-
-### 3. Backend Setup
-
-Open a new terminal:
-
-```bash
-cd backend
-cp .env.example .env
-npm install
-npm run dev
-```
-
-The backend runs at:
-
-```text
-http://localhost:4000
-```
-
-Health check:
+### 3. Check Backend Health
 
 ```bash
 curl http://localhost:4000/health
 ```
 
-Database health check:
+You should receive a JSON response from the backend.
+
+Check database connectivity:
 
 ```bash
 curl http://localhost:4000/db-health
 ```
 
-### 4. Worker Setup
+You should see that the backend can connect to PostgreSQL.
 
-Open a new terminal:
-
-```bash
-cd worker
-cp .env.example .env
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-The worker listens for Kafka messages from:
-
-```text
-audio.jobs.created
-```
-
-When a job is created, the worker updates the job status, creates mock output files, uploads those results to MinIO, and marks the job as complete.
-
-### 5. Frontend Setup
+### 4. Start The Frontend
 
 Open a new terminal:
 
@@ -182,94 +135,30 @@ npm install
 npm run dev
 ```
 
-Open:
+Then open:
 
 ```text
 http://localhost:5173
 ```
 
-Use the page to choose an audio file, upload it, create a job, watch status updates, and download mock result files.
+Use the page to choose an audio file, upload it, create a processing job, watch status updates, and download generated result files.
 
-## MinIO Console
+### 5. Stop The Project
 
-Open:
-
-```text
-http://localhost:9001
-```
-
-Default local credentials:
-
-```text
-Username: minioadmin
-Password: minioadmin123
-```
-
-Bucket:
-
-```text
-audio-processing
-```
-
-Uploaded input files appear under:
-
-```text
-uploads/
-```
-
-Mock worker outputs appear under:
-
-```text
-results/
-```
-
-## Useful Development Commands
-
-Start all Docker infrastructure:
-
-```bash
-docker compose up -d
-```
-
-Stop Docker infrastructure without deleting data:
+To stop containers without deleting data:
 
 ```bash
 docker compose stop
 ```
 
-Run backend build check:
+To stop and remove containers/networks without deleting stored PostgreSQL or MinIO data:
 
 ```bash
-cd backend
-npm run build
+docker compose down
 ```
 
-Run frontend build check:
+Do not use this unless you intentionally want to delete local stored data:
 
 ```bash
-cd frontend
-npm run build
+docker compose down -v
 ```
-
-Run Python syntax check:
-
-```bash
-cd worker
-source .venv/bin/activate
-python -m py_compile main.py
-```
-
-## Development Notes
-
-This project currently uses mock worker output files instead of real AI stem separation. The system architecture is designed so the mock worker processing step can later be replaced with real Demucs processing.
-
-Local `.env` files are intentionally ignored by Git. Use `.env.example` files as templates.
-
-## Future Improvements
-
-- Integrate Demucs for real audio stem separation
-- Dockerize backend and worker services
-- Add stronger validation and centralized error handling
-- Add user authentication
-- Add cloud deployment support
-- Replace local MinIO with AWS S3 in production
