@@ -4,6 +4,7 @@ import time
 import psycopg
 import boto3
 import shutil
+import subprocess
 from pathlib import Path
 
 from confluent_kafka import Consumer, KafkaException
@@ -30,6 +31,9 @@ s3_client = boto3.client(
 )
 
 work_dir = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
+
+processing_mode = os.getenv("PROCESSING_MODE", "mock")
+demucs_model = os.getenv("DEMUCS_MODEL", "htdemucs")
 
 
 def create_job_workspace(job_id: str) -> Path:
@@ -113,6 +117,53 @@ def upload_mock_results(job_id: str, input_path: Path) -> dict:
     return result_keys
 
 
+def run_demucs(job_id: str, input_path: Path, job_workspace: Path) -> dict:
+    if s3_bucket is None:
+        raise RuntimeError("S3_BUCKET is missing")
+
+    output_dir = job_workspace / "demucs-output"
+
+    # Run Demucs command
+    command = [
+        "python",
+        "-m",
+        "demucs",
+        "-n",
+        demucs_model,
+        "-o",
+        str(output_dir),
+        str(input_path),
+    ]
+
+    subprocess.run(command, check=True)
+
+    track_name = input_path.stem
+    separated_dir = output_dir / demucs_model / track_name
+
+    stems = ["vocals", "drums", "bass", "other"]
+    result_keys = {}
+
+    # Upload each stem to S3
+    for stem in stems:
+        stem_path = separated_dir / f"{stem}.wav"
+
+        if not stem_path.exists():
+            raise FileNotFoundError(f"Expected Demucs output missing: {stem_path}")
+
+        object_key = f"results/{job_id}/{stem}.wav"
+
+        s3_client.upload_file(
+            str(stem_path),
+            s3_bucket,
+            object_key,
+            ExtraArgs={"ContentType": "audio/wav"},
+        )
+
+        result_keys[stem] = object_key
+
+    return result_keys
+
+
 consumer = Consumer(
     {
         "bootstrap.servers": kafka_broker,
@@ -153,10 +204,15 @@ try:
 
             update_job_status(job_id, "PROCESSING", 40)
 
-            time.sleep(5)
+            if processing_mode == "demucs":
+                update_job_status(job_id, "PROCESSING", 60)
+                result_keys = run_demucs(job_id, input_path, job_workspace)
+            else:
+                time.sleep(5)  # Simulate processing time
+                result_keys = upload_mock_results(job_id, input_path)
 
-            result_keys = upload_mock_results(job_id, input_path)
             update_job_status(job_id, "COMPLETED", 100, result_keys)
+
             print(f"Job {job_id} marked as COMPLETED")
 
         except Exception as error:

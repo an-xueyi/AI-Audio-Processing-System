@@ -34,6 +34,8 @@ services:
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: minioadmin123
       S3_BUCKET: audio-processing
+      PROCESSING_MODE: mock
+      DEMUCS_MODEL: htdemucs
     depends_on:
       - postgres
       - minio
