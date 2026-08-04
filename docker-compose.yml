@@ -34,8 +34,10 @@ services:
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: minioadmin123
       S3_BUCKET: audio-processing
-      PROCESSING_MODE: mock
+      PROCESSING_MODE: demucs
       DEMUCS_MODEL: htdemucs
+    volumes:
+      - demucs_model_cache:/root/.cache/torch
     depends_on:
       - postgres
       - minio
@@ -116,3 +118,4 @@ volumes:
   postgres_data:
   minio_data:
   kafka_data:
+  demucs_model_cache:
