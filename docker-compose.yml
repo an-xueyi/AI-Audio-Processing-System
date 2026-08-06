@@ -5,16 +5,16 @@ services:
     container_name: audio-backend
     environment:
       PORT: 4000
-      DATABASE_URL: postgresql://audio_user:audio_password@postgres:5432/audio_processing
+      DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://localhost:9000
       S3_REGION: us-east-1
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?required}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?required}
       S3_BUCKET: audio-processing
       KAFKA_BROKER: kafka:29092
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     depends_on:
       - postgres
       - minio
@@ -28,11 +28,11 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
-      DATABASE_URL: postgresql://audio_user:audio_password@postgres:5432/audio_processing
+      DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?required}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?required}
       S3_BUCKET: audio-processing
       PROCESSING_MODE: demucs
       DEMUCS_MODEL: htdemucs
@@ -48,11 +48,9 @@ services:
     image: postgres:16
     container_name: audio-postgres
     environment:
-      POSTGRES_USER: audio_user
-      POSTGRES_PASSWORD: audio_password
-      POSTGRES_DB: audio_processing
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -61,11 +59,11 @@ services:
     container_name: audio-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
 
@@ -85,8 +83,6 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-    ports:
-      - "9092:9092"
     volumes:
       - kafka_data:/tmp/kraft-combined-logs
 
