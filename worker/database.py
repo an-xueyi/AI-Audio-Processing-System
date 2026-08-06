@@ -3,6 +3,21 @@ import psycopg
 from config import DATABASE_URL
 
 
+def get_job_status(job_id: str) -> str | None:
+    if DATABASE_URL is None:
+        raise RuntimeError("DATABASE_URL is missing")
+
+    with psycopg.connect(DATABASE_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status FROM jobs WHERE id = %s",
+                (job_id,),
+            )
+            result = cursor.fetchone()
+
+    return result[0] if result else None
+
+
 def update_job_status(
     job_id: str,
     status: str,

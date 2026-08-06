@@ -3,7 +3,7 @@ import shutil
 from confluent_kafka import Consumer, KafkaException
 
 from config import KAFKA_BROKER, JOB_CREATED_TOPIC
-from database import update_job_status
+from database import get_job_status, update_job_status
 from processing import create_job_workspace, process_audio_job
 
 consumer = Consumer(
@@ -11,6 +11,9 @@ consumer = Consumer(
         "bootstrap.servers": KAFKA_BROKER,
         "group.id": "audio-worker",
         "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+        "enable.auto.offset.store": False,
+        "max.poll.interval.ms": 60 * 60 * 1000,  # 1 hour
     }
 )
 
@@ -34,6 +37,18 @@ try:
         print("Received job:")
         print(job)
 
+        current_status = get_job_status(job_id)
+
+        if current_status is None:
+            print(f"Skipping unknown job {job_id}")
+            consumer.commit(message=message, asynchronous=False)
+            continue
+
+        if current_status == "COMPLETED":
+            print(f"Skipping already completed job {job_id}")
+            consumer.commit(message=message, asynchronous=False)
+            continue
+
         job_workspace = create_job_workspace(job_id)
 
         try:
@@ -52,6 +67,9 @@ try:
 
         finally:
             shutil.rmtree(job_workspace, ignore_errors=True)
+
+        consumer.commit(message=message, asynchronous=False)
+        print(f"Committed Kafka offset for job {job_id}")
 
 except KeyboardInterrupt:
     print("Worker stopped by user")
