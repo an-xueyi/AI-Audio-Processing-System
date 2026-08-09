@@ -17,3 +17,18 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 WORK_DIR = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
 PROCESSING_MODE = os.getenv("PROCESSING_MODE", "mock")
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs")
+
+DEAD_LETTER_TOPIC = os.getenv(
+    "KAFKA_DEAD_LETTER_TOPIC",
+    "audio.jobs.dead-letter",
+)
+
+MAX_PROCESSING_ATTEMPTS = max(
+    1,
+    int(os.getenv("MAX_PROCESSING_ATTEMPTS", "3")),
+)
+
+RETRY_BACKOFF_SECONDS = max(
+    0,
+    int(os.getenv("RETRY_BACKOFF_SECONDS", "5")),
+)

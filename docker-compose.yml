@@ -28,6 +28,9 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
+      KAFKA_DEAD_LETTER_TOPIC: audio.jobs.dead-letter
+      MAX_PROCESSING_ATTEMPTS: 3
+      RETRY_BACKOFF_SECONDS: 5
       DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
@@ -108,6 +111,16 @@ services:
       --replication-factor 1;
 
       echo 'Kafka topic audio.jobs.created is ready.';
+
+      /opt/kafka/bin/kafka-topics.sh
+      --bootstrap-server kafka:29092
+      --create
+      --if-not-exists
+      --topic audio.jobs.dead-letter
+      --partitions 1
+      --replication-factor 1;
+
+      echo 'Kafka topic audio.jobs.dead-letter is ready.';
       "
 
 volumes:
