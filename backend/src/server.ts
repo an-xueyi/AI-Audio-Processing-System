@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { pool } from "./db.js";
 import jobsRouter from "./routes/jobs.js";
 import uploadsRouter from "./routes/uploads.js";
-import { connectKafkaProducer } from "./kafka/producer.js";
+import { startOutboxPublisher } from "./kafka/outboxPublisher.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 
 const app = express();
@@ -129,6 +129,6 @@ jobUpdatesWebSocketServer.on("connection", (socket, request) => {
 });
 
 server.listen(PORT, async () => {
-  await connectKafkaProducer();
+  startOutboxPublisher();
   console.log(`Backend API running on port ${PORT}`);
 });

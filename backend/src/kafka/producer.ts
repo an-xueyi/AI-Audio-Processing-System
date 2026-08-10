@@ -15,6 +15,14 @@ const kafka = new Kafka({
 
 export const producer = kafka.producer();
 
+let connectionPromise: Promise<void> | null = null;
+
 export async function connectKafkaProducer() {
-  await producer.connect();
+  if (!connectionPromise) {
+    connectionPromise = producer.connect().catch((error) => {
+      connectionPromise = null;
+      throw error;
+    });
+  }
+  await connectionPromise;
 }

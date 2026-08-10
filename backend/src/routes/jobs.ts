@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
-import { jobCreatedTopic, producer } from "../kafka/producer.js";
+import { jobCreatedTopic } from "../kafka/producer.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bucketName, s3Client } from "../storage/s3.js";
@@ -36,28 +36,43 @@ router.post("/", async (req, res) => {
     });
   }
 
-  const result = await pool.query(
-    `INSERT INTO jobs (original_file_name, input_object_key, status, progress) VALUES ($1, $2, $3, $4) RETURNING *`,
-    [originalFileName, inputObjectKey, "PENDING", 0],
-  );
+  const client = await pool.connect();
 
-  const job = result.rows[0];
+  try {
+    await client.query("BEGIN");
 
-  await producer.send({
-    topic: jobCreatedTopic,
-    messages: [
-      {
-        key: job.id,
-        value: JSON.stringify({
-          jobId: job.id,
-          inputObjectKey: job.input_object_key,
-          originalFileName: job.original_file_name,
-        }),
-      },
-    ],
-  });
+    const result = await client.query(
+      `INSERT INTO jobs 
+      (original_file_name, input_object_key, status, progress) 
+      VALUES ($1, $2, $3, $4) 
+      RETURNING *`,
+      [originalFileName, inputObjectKey, "PENDING", 0],
+    );
 
-  res.status(201).json(job);
+    const job = result.rows[0];
+
+    const eventPayload = {
+      jobId: job.id,
+      inputObjectKey: job.input_object_key,
+      originalFileName: job.original_file_name,
+    };
+
+    await client.query(
+      `INSERT INTO outbox_events 
+      (topic, event_key, payload) 
+      VALUES ($1, $2, $3::jsonb)`,
+      [jobCreatedTopic, job.id, JSON.stringify(eventPayload)],
+    );
+
+    await client.query("COMMIT");
+
+    res.status(201).json(job);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 type ResultObjectKeys = Record<string, string>;
