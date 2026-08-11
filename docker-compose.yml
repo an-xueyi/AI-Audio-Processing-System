@@ -24,10 +24,10 @@ services:
   worker:
     build:
       context: ./worker
-    container_name: audio-worker
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
+      KAFKA_CONSUMER_GROUP: audio-worker
       KAFKA_DEAD_LETTER_TOPIC: audio.jobs.dead-letter
       MAX_PROCESSING_ATTEMPTS: 3
       RETRY_BACKOFF_SECONDS: 5
@@ -107,7 +107,7 @@ services:
       --create
       --if-not-exists
       --topic audio.jobs.created
-      --partitions 1
+      --partitions 3
       --replication-factor 1;
 
       echo 'Kafka topic audio.jobs.created is ready.';

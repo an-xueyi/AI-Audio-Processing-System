@@ -6,6 +6,8 @@ from confluent_kafka import Consumer, KafkaException
 from config import (
     KAFKA_BROKER,
     JOB_CREATED_TOPIC,
+    KAFKA_CONSUMER_GROUP,
+    WORKER_ID,
     MAX_PROCESSING_ATTEMPTS,
     RETRY_BACKOFF_SECONDS,
 )
@@ -16,7 +18,7 @@ from messaging import publish_dead_letter
 consumer = Consumer(
     {
         "bootstrap.servers": KAFKA_BROKER,
-        "group.id": "audio-worker",
+        "group.id": KAFKA_CONSUMER_GROUP,
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
         "enable.auto.offset.store": False,
@@ -25,7 +27,7 @@ consumer = Consumer(
 )
 
 consumer.subscribe([JOB_CREATED_TOPIC])
-print(f"Worker listening for messages on topic: {JOB_CREATED_TOPIC}")
+print(f"Worker {WORKER_ID} listening for messages on topic: {JOB_CREATED_TOPIC}")
 
 try:
     while True:
@@ -41,7 +43,7 @@ try:
         job_id = job["jobId"]
         input_object_key = job["inputObjectKey"]
 
-        print("Received job:")
+        print(f"Worker {WORKER_ID} received job:")
         print(job)
 
         current_status = get_job_status(job_id)
