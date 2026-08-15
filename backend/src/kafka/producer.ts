@@ -26,3 +26,16 @@ export async function connectKafkaProducer() {
   }
   await connectionPromise;
 }
+
+export async function disconnectKafkaProducer() {
+  if (!connectionPromise) {
+    return;
+  }
+
+  try {
+    await connectionPromise;
+    await producer.disconnect();
+  } finally {
+    connectionPromise = null;
+  }
+}

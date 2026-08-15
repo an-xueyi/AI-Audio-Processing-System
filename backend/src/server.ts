@@ -5,7 +5,11 @@ import { WebSocket, WebSocketServer } from "ws";
 import { pool } from "./db.js";
 import jobsRouter from "./routes/jobs.js";
 import uploadsRouter from "./routes/uploads.js";
-import { startOutboxPublisher } from "./kafka/outboxPublisher.js";
+import {
+  startOutboxPublisher,
+  stopOutboxPublisher,
+} from "./kafka/outboxPublisher.js";
+import { disconnectKafkaProducer } from "./kafka/producer.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 
 const app = express();
@@ -19,6 +23,24 @@ const PORT = process.env.PORT || 4000;
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "backend" });
+});
+
+app.get("/ready", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+
+    res.json({
+      status: "ready",
+      service: "backend",
+      database: "connected",
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: "not ready",
+      service: "backend",
+      database: "disconnected",
+    });
+  }
 });
 
 app.get("/db-health", async (req, res) => {
@@ -128,7 +150,70 @@ jobUpdatesWebSocketServer.on("connection", (socket, request) => {
   });
 });
 
-server.listen(PORT, async () => {
+server.listen(PORT, () => {
   startOutboxPublisher();
   console.log(`Backend API running on port ${PORT}`);
+});
+
+let isShuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log(`Received ${signal}. Shutting down backend...`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error("Graceful shutdown timed out");
+    process.exit(1);
+  }, 30_000);
+
+  forceExitTimer.unref();
+
+  for (const socket of jobUpdatesWebSocketServer.clients) {
+    socket.close(1001, "Server shutting down");
+  }
+
+  try {
+    const websocketServerClosed = new Promise<void>((resolve) => {
+      jobUpdatesWebSocketServer.close(() => resolve());
+    });
+
+    const httpServerClosed = new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    await Promise.all([
+      websocketServerClosed,
+      httpServerClosed,
+      stopOutboxPublisher(),
+    ]);
+
+    await disconnectKafkaProducer();
+    await pool.end();
+
+    clearTimeout(forceExitTimer);
+    console.log("Backend shutdown completed");
+    process.exit(0);
+  } catch (error) {
+    console.error("Backend shutdown failed:", error);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
 });

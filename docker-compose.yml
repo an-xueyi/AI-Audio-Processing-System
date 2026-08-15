@@ -15,10 +15,25 @@ services:
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
     ports:
       - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:4000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
-      - postgres
-      - minio
-      - kafka-init
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   worker:
@@ -42,10 +57,14 @@ services:
     volumes:
       - demucs_model_cache:/root/.cache/torch
     depends_on:
-      - postgres
-      - minio
-      - kafka-init
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     restart: unless-stopped
+    stop_grace_period: 1h
 
   postgres:
     image: postgres:16
@@ -56,6 +75,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   minio:
     image: minio/minio:latest
@@ -69,6 +94,28 @@ services:
       - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "
+      until mc alias set local http://minio:9000
+      \"$${MINIO_ROOT_USER}\"
+      \"$${MINIO_ROOT_PASSWORD}\";
+        do echo 'Waiting for MinIO to be ready...';
+        sleep 2;
+      done;
+
+      mc mb --ignore-existing local/audio-processing;
+      echo 'MinIO is ready and bucket audio-processing exists.';
+      "
 
   kafka:
     image: apache/kafka:4.3.1
@@ -88,12 +135,23 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     volumes:
       - kafka_data:/tmp/kraft-combined-logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
 
   kafka-init:
     image: apache/kafka:4.3.1
     container_name: audio-kafka-init
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command: >
       "

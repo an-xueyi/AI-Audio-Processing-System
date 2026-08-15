@@ -1,3 +1,4 @@
+import { clearInterval } from "timers";
 import { pool } from "../db.js";
 import { connectKafkaProducer, producer } from "./producer.js";
 
@@ -10,6 +11,7 @@ type OutboxEvent = {
 
 const PUBLISH_INTERVAL_MS = 2000; // 2 seconds
 let isPublishing = false;
+let publishInterval: NodeJS.Timeout | null = null;
 
 export async function publishPendingOutboxEvents() {
   if (isPublishing) {
@@ -81,9 +83,24 @@ export async function publishPendingOutboxEvents() {
 }
 
 export function startOutboxPublisher() {
+  if (publishInterval) {
+    return;
+  }
+
   void publishPendingOutboxEvents();
 
-  setInterval(() => {
+  publishInterval = setInterval(() => {
     void publishPendingOutboxEvents();
   }, PUBLISH_INTERVAL_MS);
+}
+
+export async function stopOutboxPublisher() {
+  if (publishInterval) {
+    clearInterval(publishInterval);
+    publishInterval = null;
+  }
+
+  while (isPublishing) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }

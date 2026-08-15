@@ -1,4 +1,5 @@
 import json
+import signal
 import shutil
 import time
 from confluent_kafka import Consumer, KafkaException
@@ -15,6 +16,21 @@ from database import get_job_status, update_job_status
 from processing import create_job_workspace, process_audio_job
 from messaging import publish_dead_letter
 
+shutdown_requested = False
+
+
+def request_shutdown(signal_number, _frame):
+    global shutdown_requested
+    shutdown_requested = True
+    print(
+        f"Worker {WORKER_ID} received signal {signal_number}. "
+        "It will stop after its current job."
+    )
+
+
+signal.signal(signal.SIGTERM, request_shutdown)
+signal.signal(signal.SIGINT, request_shutdown)
+
 consumer = Consumer(
     {
         "bootstrap.servers": KAFKA_BROKER,
@@ -30,7 +46,7 @@ consumer.subscribe([JOB_CREATED_TOPIC])
 print(f"Worker {WORKER_ID} listening for messages on topic: {JOB_CREATED_TOPIC}")
 
 try:
-    while True:
+    while not shutdown_requested:
         message = consumer.poll(1.0)
 
         if message is None:
@@ -106,8 +122,6 @@ try:
         consumer.commit(message=message, asynchronous=False)
         print(f"Committed Kafka offset for job {job_id}")
 
-except KeyboardInterrupt:
-    print("Worker stopped by user")
-
 finally:
     consumer.close()
+    print(f"Worker {WORKER_ID} shutdown completed")
