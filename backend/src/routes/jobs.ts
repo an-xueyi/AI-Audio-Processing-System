@@ -1,38 +1,71 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { jobCreatedTopic } from "../kafka/producer.js";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { bucketName, s3Client } from "../storage/s3.js";
+import { z } from "zod";
+import {
+  allowedAudioContentTypes,
+  maxUploadBytes,
+} from "../config/upload.js";
+import { bucketName, s3Client, s3PublicClient } from "../storage/s3.js";
 
 const router = Router();
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const createJobSchema = z
+  .object({
+    originalFileName: z.string().trim().min(1).max(255),
+    inputObjectKey: z.string().trim().min(1).max(1024),
+  })
+  .strict();
+
 router.post("/", async (req, res) => {
-  const { originalFileName, inputObjectKey } = req.body;
+  const parsedRequest = createJobSchema.safeParse(req.body);
 
-  if (
-    typeof originalFileName !== "string" ||
-    originalFileName.trim().length === 0
-  ) {
+  if (!parsedRequest.success) {
     return res.status(400).json({
-      error: "originalFileName is required",
+      error: parsedRequest.error.issues[0]?.message || "Invalid job request",
     });
   }
 
-  if (
-    typeof inputObjectKey !== "string" ||
-    inputObjectKey.trim().length === 0
-  ) {
+  const { originalFileName, inputObjectKey } = parsedRequest.data;
+  const requiredObjectPrefix = `uploads/${req.sessionId}/`;
+
+  if (!inputObjectKey.startsWith(requiredObjectPrefix)) {
     return res.status(400).json({
-      error: "inputObjectKey is required",
+      error: "The uploaded object does not belong to this session",
     });
   }
 
-  if (!inputObjectKey.startsWith("uploads/")) {
+  try {
+    const object = await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucketName,
+        Key: inputObjectKey,
+      }),
+    );
+
+    if (object.Metadata?.["owner-id"] !== req.sessionId) {
+      return res.status(400).json({
+        error: "The uploaded object has invalid ownership metadata",
+      });
+    }
+
+    if (
+      !object.ContentType ||
+      !allowedAudioContentTypes.has(object.ContentType) ||
+      !object.ContentLength ||
+      object.ContentLength > maxUploadBytes
+    ) {
+      return res.status(400).json({
+        error: "The uploaded object does not satisfy the audio upload policy",
+      });
+    }
+  } catch (error) {
     return res.status(400).json({
-      error: "inputObjectKey must start with uploads/",
+      error: "The uploaded audio object could not be verified",
     });
   }
 
@@ -43,10 +76,11 @@ router.post("/", async (req, res) => {
 
     const result = await client.query(
       `INSERT INTO jobs 
-      (original_file_name, input_object_key, status, progress) 
-      VALUES ($1, $2, $3, $4) 
-      RETURNING *`,
-      [originalFileName, inputObjectKey, "PENDING", 0],
+      (owner_id, original_file_name, input_object_key, status, progress)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, original_file_name, input_object_key, status, progress,
+                result_object_keys, error_message, created_at, updated_at`,
+      [req.sessionId, originalFileName, inputObjectKey, "PENDING", 0],
     );
 
     const job = result.rows[0];
@@ -90,8 +124,8 @@ router.get("/:id/downloads", async (req, res) => {
     const result = await pool.query(
       `SELECT id, status, progress, result_object_keys 
       FROM jobs 
-      WHERE id = $1`,
-      [id],
+      WHERE id = $1 AND owner_id = $2`,
+      [id, req.sessionId],
     );
 
     if (result.rows.length === 0) {
@@ -123,7 +157,7 @@ router.get("/:id/downloads", async (req, res) => {
         Key: objectKey,
       });
 
-      downloadUrls[stemName] = await getSignedUrl(s3Client, command, {
+      downloadUrls[stemName] = await getSignedUrl(s3PublicClient, command, {
         expiresIn: 60 * 5,
       });
     }
@@ -144,7 +178,13 @@ router.get("/:id", async (req, res) => {
     });
   }
 
-  const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
+  const result = await pool.query(
+    `SELECT id, original_file_name, input_object_key, status, progress,
+            result_object_keys, error_message, created_at, updated_at
+     FROM jobs
+     WHERE id = $1 AND owner_id = $2`,
+    [id, req.sessionId],
+  );
 
   if (result.rows.length === 0) {
     return res.status(404).json({ error: "Job not found" });

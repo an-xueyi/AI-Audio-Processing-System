@@ -11,6 +11,7 @@ type PresignResponse = {
   objectKey: string;
   bucket: string;
   expiresInSeconds: number;
+  maxUploadBytes: number;
 };
 
 type Job = {
@@ -33,6 +34,24 @@ type ApiErrorResponse = {
   error?: string;
 };
 
+const fallbackAudioContentTypes: Record<string, string> = {
+  aac: "audio/aac",
+  flac: "audio/flac",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  ogg: "audio/ogg",
+  wav: "audio/wav",
+};
+
+function getAudioContentType(file: File): string {
+  if (file.type) {
+    return file.type;
+  }
+
+  const extension = file.name.toLowerCase().split(".").pop();
+  return extension ? fallbackAudioContentTypes[extension] || "" : "";
+}
+
 type JobWebSocketMessage =
   | {
       type: "job_update";
@@ -51,6 +70,7 @@ function App() {
   const [job, setJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string>("Checking backend...");
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [sessionReady, setSessionReady] = useState<boolean>(false);
   const [downloadUrls, setDownloadUrls] = useState<Record<
     string,
     string
@@ -60,14 +80,23 @@ function App() {
     try {
       const data = (await response.json()) as ApiErrorResponse;
       return data.error || fallback;
-    } catch (error) {
+    } catch {
       return fallback;
     }
   }
 
   useEffect(() => {
-    async function checkBackendHealth() {
+    async function initializeApplication() {
       try {
+        const sessionResponse = await fetch(`${API_BASE_URL}/api/session`, {
+          method: "POST",
+          credentials: "include",
+        });
+
+        if (!sessionResponse.ok) {
+          throw new Error("Could not create a secure browser session");
+        }
+
         const response = await fetch(`${API_BASE_URL}/health`);
 
         if (!response.ok) {
@@ -76,17 +105,21 @@ function App() {
 
         const data = (await response.json()) as HealthResponse;
         setBackendHealth(data);
+        setSessionReady(true);
         setMessage("Backend is connected.");
-      } catch (error) {
+      } catch {
+        setSessionReady(false);
         setMessage("Could not connect to backend.");
       }
     }
 
-    checkBackendHealth();
+    void initializeApplication();
   }, []);
 
   async function fetchDownloadUrls(jobId: string) {
-    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/downloads`);
+    const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/downloads`, {
+      credentials: "include",
+    });
 
     if (!response.ok) {
       throw new Error(
@@ -160,6 +193,18 @@ function App() {
       return;
     }
 
+    if (!sessionReady) {
+      setMessage("The secure browser session is not ready.");
+      return;
+    }
+
+    const contentType = getAudioContentType(selectedFile);
+
+    if (!contentType) {
+      setMessage("Could not determine the selected file's audio type.");
+      return;
+    }
+
     try {
       setIsUploading(true);
       setMessage("Requesting presigned URL...");
@@ -168,12 +213,14 @@ function App() {
         `${API_BASE_URL}/api/uploads/presign`,
         {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             fileName: selectedFile.name,
-            contentType: selectedFile.type || "application/octet-stream",
+            contentType,
+            fileSize: selectedFile.size,
           }),
         },
       );
@@ -191,7 +238,7 @@ function App() {
       const uploadResponse = await fetch(presignData.uploadUrl, {
         method: "PUT",
         headers: {
-          "Content-Type": selectedFile.type || "application/octet-stream",
+          "Content-Type": contentType,
         },
         body: selectedFile,
       });
@@ -204,6 +251,7 @@ function App() {
 
       const jobResponse = await fetch(`${API_BASE_URL}/api/jobs`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -288,7 +336,7 @@ function App() {
           className="primary-button"
           type="button"
           onClick={handleUploadAndCreateJob}
-          disabled={!selectedFile || isUploading}
+          disabled={!selectedFile || isUploading || !sessionReady}
         >
           {isUploading ? "Uploading..." : "Upload and Create Job"}
         </button>

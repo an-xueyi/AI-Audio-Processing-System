@@ -13,12 +13,22 @@ function requireEnv(name: string): string {
 
 export const bucketName = requireEnv("S3_BUCKET");
 
-export const s3Client = new S3Client({
-  region: requireEnv("S3_REGION"),
-  endpoint: requireEnv("S3_ENDPOINT"),
-  credentials: {
-    accessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
-    secretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
-  },
-  forcePathStyle: true, // Required for MinIO
-});
+const region = requireEnv("S3_REGION");
+const credentials = {
+  accessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
+  secretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
+};
+const internalEndpoint = requireEnv("S3_ENDPOINT");
+const publicEndpoint = process.env.S3_PUBLIC_ENDPOINT || internalEndpoint;
+
+function createS3Client(endpoint: string) {
+  return new S3Client({
+    region,
+    endpoint,
+    credentials,
+    forcePathStyle: true,
+  });
+}
+
+export const s3Client = createS3Client(internalEndpoint);
+export const s3PublicClient = createS3Client(publicEndpoint);

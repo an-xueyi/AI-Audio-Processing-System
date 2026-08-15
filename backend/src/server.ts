@@ -1,9 +1,15 @@
 import { createServer } from "http";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { WebSocket, WebSocketServer } from "ws";
+import { readSessionId, requireSession } from "./auth/session.js";
+import { isAllowedOrigin } from "./config/security.js";
 import { pool } from "./db.js";
+import { requireAllowedOrigin } from "./middleware/origin.js";
+import { apiRateLimit, uploadRateLimit } from "./middleware/rateLimits.js";
 import jobsRouter from "./routes/jobs.js";
+import sessionRouter from "./routes/session.js";
 import uploadsRouter from "./routes/uploads.js";
 import {
   startOutboxPublisher,
@@ -14,12 +20,27 @@ import type { ErrorRequestHandler, RequestHandler } from "express";
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-app.use("/api/jobs", jobsRouter);
-app.use("/api/uploads", uploadsRouter);
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, isAllowedOrigin(origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  }),
+);
+app.use(express.json({ limit: "32kb" }));
+app.use("/api", requireAllowedOrigin, apiRateLimit);
+app.use("/api/session", sessionRouter);
+app.use("/api/uploads", requireSession, uploadRateLimit, uploadsRouter);
+app.use("/api/jobs", requireSession, jobsRouter);
 
 const PORT = process.env.PORT || 4000;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "backend" });
@@ -83,20 +104,44 @@ const jobUpdatesWebSocketServer = new WebSocketServer({
 });
 
 jobUpdatesWebSocketServer.on("connection", (socket, request) => {
+  if (!isAllowedOrigin(request.headers.origin)) {
+    socket.send(
+      JSON.stringify({
+        type: "error",
+        error: "WebSocket origin is not allowed",
+      }),
+    );
+    socket.close(1008, "Origin not allowed");
+    return;
+  }
+
+  const sessionId = readSessionId(request.headers.cookie);
+
+  if (!sessionId) {
+    socket.send(
+      JSON.stringify({
+        type: "error",
+        error: "A valid session is required",
+      }),
+    );
+    socket.close(1008, "Authentication required");
+    return;
+  }
+
   const requestUrl = new URL(
     request.url || "",
     `http://${request.headers.host}`,
   );
   const jobId = requestUrl.searchParams.get("jobId");
 
-  if (!jobId) {
+  if (!jobId || !uuidPattern.test(jobId)) {
     socket.send(
       JSON.stringify({
         type: "error",
-        error: "jobId query parameter is required",
+        error: "A valid jobId query parameter is required",
       }),
     );
-    socket.close();
+    socket.close(1008, "Invalid job ID");
     return;
   }
 
@@ -104,9 +149,13 @@ jobUpdatesWebSocketServer.on("connection", (socket, request) => {
 
   const intervalId = setInterval(async () => {
     try {
-      const result = await pool.query("SELECT * FROM jobs WHERE id = $1", [
-        jobId,
-      ]);
+      const result = await pool.query(
+        `SELECT id, original_file_name, input_object_key, status, progress,
+                result_object_keys, error_message, created_at, updated_at
+         FROM jobs
+         WHERE id = $1 AND owner_id = $2`,
+        [jobId, sessionId],
+      );
 
       if (result.rows.length === 0) {
         socket.send(
