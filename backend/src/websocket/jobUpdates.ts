@@ -1,33 +1,19 @@
 import type { Server } from "http";
 import { WebSocket, WebSocketServer } from "ws";
-import { z } from "zod";
 import { readSessionId } from "../auth/session.js";
 import { isAllowedOrigin } from "../config/security.js";
-import { pool } from "../db.js";
+import { clientMessageSchema } from "./jobProtocol.js";
+import { findOwnedJob } from "./jobRepository.js";
 
 const heartbeatIntervalMs = 30_000;
-const jobPollIntervalMs = 1_000;
-const uuidSchema = z.string().uuid();
-
-const clientMessageSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("subscribe"),
-      jobId: uuidSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("unsubscribe"),
-    })
-    .strict(),
-]);
+const safetyRefreshIntervalMs = 30_000;
 
 type JobSubscription = {
   jobId: string;
-  intervalId: NodeJS.Timeout | null;
-  isPolling: boolean;
+  safetyIntervalId: NodeJS.Timeout | null;
+  isRefreshing: boolean;
   previousPayload: string;
+  refreshRequested: boolean;
 };
 
 type JobSocket = WebSocket & {
@@ -40,6 +26,7 @@ type JobSocket = WebSocket & {
 type JobUpdatesService = {
   closeClients: () => void;
   closeServer: () => Promise<void>;
+  notifyJobChanged: (jobId: string) => Promise<void>;
 };
 
 function sendJson(socket: WebSocket, message: object) {
@@ -49,23 +36,11 @@ function sendJson(socket: WebSocket, message: object) {
 }
 
 function clearSubscription(socket: JobSocket) {
-  if (socket.subscription?.intervalId) {
-    clearInterval(socket.subscription.intervalId);
+  if (socket.subscription?.safetyIntervalId) {
+    clearInterval(socket.subscription.safetyIntervalId);
   }
 
   delete socket.subscription;
-}
-
-async function findOwnedJob(jobId: string, sessionId: string) {
-  const result = await pool.query(
-    `SELECT id, original_file_name, input_object_key, status, progress,
-            result_object_keys, error_message, created_at, updated_at
-     FROM jobs
-     WHERE id = $1 AND owner_id = $2`,
-    [jobId, sessionId],
-  );
-
-  return result.rows[0] ?? null;
 }
 
 function isTerminalStatus(status: string) {
@@ -87,47 +62,58 @@ function sendJobUpdate(
     subscription.previousPayload = payload;
   }
 
-  if (isTerminalStatus(String(job.status)) && subscription.intervalId) {
-    clearInterval(subscription.intervalId);
-    subscription.intervalId = null;
+  if (
+    isTerminalStatus(String(job.status)) &&
+    subscription.safetyIntervalId
+  ) {
+    clearInterval(subscription.safetyIntervalId);
+    subscription.safetyIntervalId = null;
   }
 }
 
-async function pollSubscription(
+async function refreshSubscription(
   socket: JobSocket,
   subscription: JobSubscription,
 ) {
-  if (subscription.isPolling || socket.subscription !== subscription) {
+  if (socket.subscription !== subscription) {
     return;
   }
 
-  subscription.isPolling = true;
+  if (subscription.isRefreshing) {
+    subscription.refreshRequested = true;
+    return;
+  }
+
+  subscription.isRefreshing = true;
 
   try {
-    const job = await findOwnedJob(subscription.jobId, socket.sessionId);
+    do {
+      subscription.refreshRequested = false;
+      const job = await findOwnedJob(subscription.jobId, socket.sessionId);
 
-    if (socket.subscription !== subscription) {
-      return;
-    }
+      if (socket.subscription !== subscription) {
+        return;
+      }
 
-    if (!job) {
-      sendJson(socket, {
-        type: "error",
-        error: "Job not found",
-      });
-      clearSubscription(socket);
-      return;
-    }
+      if (!job) {
+        sendJson(socket, {
+          type: "error",
+          error: "Job not found",
+        });
+        clearSubscription(socket);
+        return;
+      }
 
-    sendJobUpdate(socket, subscription, job);
+      sendJobUpdate(socket, subscription, job);
+    } while (subscription.refreshRequested);
   } catch (error) {
-    console.error("WebSocket job polling failed:", error);
+    console.error("WebSocket job refresh failed:", error);
     sendJson(socket, {
       type: "error",
       error: "Failed to fetch job status",
     });
   } finally {
-    subscription.isPolling = false;
+    subscription.isRefreshing = false;
   }
 }
 
@@ -152,9 +138,10 @@ async function subscribeToJob(socket: JobSocket, jobId: string) {
 
   const subscription: JobSubscription = {
     jobId,
-    intervalId: null,
-    isPolling: false,
+    safetyIntervalId: null,
+    isRefreshing: false,
     previousPayload: "",
+    refreshRequested: false,
   };
 
   socket.subscription = subscription;
@@ -162,9 +149,9 @@ async function subscribeToJob(socket: JobSocket, jobId: string) {
   sendJobUpdate(socket, subscription, job);
 
   if (!isTerminalStatus(job.status)) {
-    subscription.intervalId = setInterval(() => {
-      void pollSubscription(socket, subscription);
-    }, jobPollIntervalMs);
+    subscription.safetyIntervalId = setInterval(() => {
+      void refreshSubscription(socket, subscription);
+    }, safetyRefreshIntervalMs);
   }
 }
 
@@ -293,6 +280,19 @@ export function createJobUpdatesService(
       return new Promise<void>((resolve) => {
         webSocketServer.close(() => resolve());
       });
+    },
+    async notifyJobChanged(jobId: string) {
+      const refreshes: Promise<void>[] = [];
+
+      for (const webSocket of webSocketServer.clients) {
+        const socket = webSocket as JobSocket;
+
+        if (socket.subscription?.jobId === jobId) {
+          refreshes.push(refreshSubscription(socket, socket.subscription));
+        }
+      }
+
+      await Promise.all(refreshes);
     },
   };
 }

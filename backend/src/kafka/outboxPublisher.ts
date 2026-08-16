@@ -9,7 +9,12 @@ type OutboxEvent = {
   payload: Record<string, unknown>;
 };
 
-const PUBLISH_INTERVAL_MS = 2000; // 2 seconds
+const configuredPublishIntervalMs = Number(
+  process.env.OUTBOX_PUBLISH_INTERVAL_MS || "500",
+);
+const publishIntervalMs = Number.isFinite(configuredPublishIntervalMs)
+  ? Math.max(100, configuredPublishIntervalMs)
+  : 500;
 let isPublishing = false;
 let publishInterval: NodeJS.Timeout | null = null;
 
@@ -91,7 +96,7 @@ export function startOutboxPublisher() {
 
   publishInterval = setInterval(() => {
     void publishPendingOutboxEvents();
-  }, PUBLISH_INTERVAL_MS);
+  }, publishIntervalMs);
 }
 
 export async function stopOutboxPublisher() {

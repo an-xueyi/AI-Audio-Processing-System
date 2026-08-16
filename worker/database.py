@@ -2,7 +2,7 @@ import json
 
 import psycopg
 
-from config import DATABASE_URL
+from config import DATABASE_URL, JOB_STATUS_TOPIC
 
 
 def require_database_url() -> str:
@@ -10,6 +10,16 @@ def require_database_url() -> str:
         raise RuntimeError("DATABASE_URL is missing")
 
     return DATABASE_URL
+
+
+def enqueue_job_status_event(cursor, job_id: str) -> None:
+    cursor.execute(
+        """
+        INSERT INTO outbox_events (topic, event_key, payload)
+        VALUES (%s, %s, jsonb_build_object('jobId', %s::text))
+        """,
+        (JOB_STATUS_TOPIC, job_id, job_id),
+    )
 
 
 def claim_job(
@@ -48,6 +58,7 @@ def claim_job(
             claimed_job = cursor.fetchone()
 
             if claimed_job is not None:
+                enqueue_job_status_event(cursor, job_id)
                 return True, claimed_job[0]
 
             cursor.execute(
@@ -79,6 +90,9 @@ def begin_job_attempt(job_id: str, worker_id: str) -> int:
                 (job_id, worker_id),
             )
             result = cursor.fetchone()
+
+            if result is not None:
+                enqueue_job_status_event(cursor, job_id)
 
     if result is None:
         raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")
@@ -149,6 +163,9 @@ def update_job_status(
                 ),
             )
             job_was_updated = cursor.rowcount == 1
+
+            if job_was_updated:
+                enqueue_job_status_event(cursor, job_id)
 
     if not job_was_updated:
         raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")

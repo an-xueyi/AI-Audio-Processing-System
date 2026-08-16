@@ -15,6 +15,10 @@ import {
   stopOutboxPublisher,
 } from "./kafka/outboxPublisher.js";
 import { disconnectKafkaProducer } from "./kafka/producer.js";
+import {
+  startJobStatusConsumer,
+  stopJobStatusConsumer,
+} from "./kafka/jobStatusConsumer.js";
 import { createJobUpdatesService } from "./websocket/jobUpdates.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 
@@ -98,8 +102,15 @@ const server = createServer(app);
 const jobUpdatesService = createJobUpdatesService(server);
 
 server.listen(PORT, () => {
-  startOutboxPublisher();
   console.log(`Backend API running on port ${PORT}`);
+
+  void startJobStatusConsumer(jobUpdatesService.notifyJobChanged)
+    .then(() => {
+      startOutboxPublisher();
+    })
+    .catch((error) => {
+      console.error("Failed to start Kafka background services:", error);
+    });
 });
 
 let isShuttingDown = false;
@@ -137,6 +148,7 @@ async function shutdown(signal: string) {
       jobUpdatesService.closeServer(),
       httpServerClosed,
       stopOutboxPublisher(),
+      stopJobStatusConsumer(),
     ]);
 
     await disconnectKafkaProducer();

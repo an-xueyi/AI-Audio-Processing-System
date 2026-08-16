@@ -6,6 +6,7 @@ load_dotenv()
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 JOB_CREATED_TOPIC = os.getenv("KAFKA_JOB_CREATED_TOPIC", "audio.jobs.created")
+JOB_STATUS_TOPIC = os.getenv("KAFKA_JOB_STATUS_TOPIC", "audio.jobs.status")
 KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "audio-worker")
 WORKER_ID = os.getenv("HOSTNAME", "local-worker")
 DATABASE_URL = os.getenv("DATABASE_URL")
