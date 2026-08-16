@@ -57,16 +57,18 @@ def upload_mock_results(job_id: str, input_path: Path) -> dict:
 
 
 def upload_demucs_results(job_id: str, separated_dir: Path) -> dict:
-    stems = ["vocals", "drums", "bass", "other"]
+    stem_paths = sorted(separated_dir.glob("*.wav"))
+
+    if not stem_paths:
+        raise FileNotFoundError(
+            f"Demucs did not create any WAV stems in: {separated_dir}"
+        )
+
     result_keys = {}
 
-    for stem in stems:
-        stem_path = separated_dir / f"{stem}.wav"
-
-        if not stem_path.exists():
-            raise FileNotFoundError(f"Expected Demucs output missing: {stem_path}")
-
-        object_key = f"results/{job_id}/{stem}.wav"
+    for stem_path in stem_paths:
+        stem_name = stem_path.stem
+        object_key = f"results/{job_id}/{stem_name}.wav"
 
         s3_client.upload_file(
             str(stem_path),
@@ -75,6 +77,6 @@ def upload_demucs_results(job_id: str, separated_dir: Path) -> dict:
             ExtraArgs={"ContentType": "audio/wav"},
         )
 
-        result_keys[stem] = object_key
+        result_keys[stem_name] = object_key
 
     return result_keys

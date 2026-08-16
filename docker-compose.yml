@@ -58,7 +58,7 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?required}
       S3_BUCKET: audio-processing
       PROCESSING_MODE: demucs
-      DEMUCS_MODEL: htdemucs
+      DEMUCS_MODEL: htdemucs_6s
     volumes:
       - demucs_model_cache:/root/.cache/torch
     depends_on:

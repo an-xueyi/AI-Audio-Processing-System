@@ -18,7 +18,7 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 
 WORK_DIR = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
 PROCESSING_MODE = os.getenv("PROCESSING_MODE", "mock")
-DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs")
+DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_6s")
 
 DEAD_LETTER_TOPIC = os.getenv(
     "KAFKA_DEAD_LETTER_TOPIC",
