@@ -51,6 +51,8 @@ services:
       KAFKA_DEAD_LETTER_TOPIC: audio.jobs.dead-letter
       MAX_PROCESSING_ATTEMPTS: 3
       RETRY_BACKOFF_SECONDS: 5
+      JOB_LEASE_TIMEOUT_SECONDS: 300
+      JOB_HEARTBEAT_INTERVAL_SECONDS: 30
       DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1

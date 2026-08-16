@@ -1,34 +1,122 @@
 import json
+
 import psycopg
+
 from config import DATABASE_URL
 
 
-def get_job_status(job_id: str) -> str | None:
+def require_database_url() -> str:
     if DATABASE_URL is None:
         raise RuntimeError("DATABASE_URL is missing")
 
-    with psycopg.connect(DATABASE_URL) as connection:
+    return DATABASE_URL
+
+
+def claim_job(
+    job_id: str,
+    worker_id: str,
+    lease_timeout_seconds: int,
+) -> tuple[bool, str | None]:
+    with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE jobs
+                SET status = 'PROCESSING',
+                    progress = GREATEST(progress, 10),
+                    processing_worker_id = %s,
+                    processing_started_at = NOW(),
+                    processing_heartbeat_at = NOW(),
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND (
+                    status = 'PENDING'
+                    OR (
+                      status IN ('PROCESSING', 'RETRYING')
+                      AND (
+                        processing_heartbeat_at IS NULL
+                        OR processing_heartbeat_at <
+                           NOW() - (%s * INTERVAL '1 second')
+                      )
+                    )
+                  )
+                RETURNING status
+                """,
+                (worker_id, job_id, lease_timeout_seconds),
+            )
+            claimed_job = cursor.fetchone()
+
+            if claimed_job is not None:
+                return True, claimed_job[0]
+
             cursor.execute(
                 "SELECT status FROM jobs WHERE id = %s",
                 (job_id,),
             )
+            existing_job = cursor.fetchone()
+
+    return False, existing_job[0] if existing_job else None
+
+
+def begin_job_attempt(job_id: str, worker_id: str) -> int:
+    with psycopg.connect(require_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE jobs
+                SET status = 'PROCESSING',
+                    progress = 10,
+                    processing_attempts = processing_attempts + 1,
+                    processing_heartbeat_at = NOW(),
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND processing_worker_id = %s
+                  AND status IN ('PROCESSING', 'RETRYING')
+                RETURNING processing_attempts
+                """,
+                (job_id, worker_id),
+            )
             result = cursor.fetchone()
 
-    return result[0] if result else None
+    if result is None:
+        raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")
+
+    return result[0]
+
+
+def refresh_job_lease(job_id: str, worker_id: str) -> bool:
+    with psycopg.connect(require_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE jobs
+                SET processing_heartbeat_at = NOW()
+                WHERE id = %s
+                  AND processing_worker_id = %s
+                  AND status IN ('PROCESSING', 'RETRYING')
+                """,
+                (job_id, worker_id),
+            )
+            lease_was_refreshed = cursor.rowcount == 1
+
+    return lease_was_refreshed
 
 
 def update_job_status(
     job_id: str,
+    worker_id: str,
     status: str,
     progress: int,
     result_keys: dict | None = None,
     error_message: str | None = None,
 ) -> None:
-    if DATABASE_URL is None:
-        raise RuntimeError("DATABASE_URL is missing")
+    serialized_result_keys = (
+        json.dumps(result_keys) if result_keys is not None else None
+    )
 
-    with psycopg.connect(DATABASE_URL) as connection:
+    with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -37,14 +125,30 @@ def update_job_status(
                     progress = %s,
                     result_object_keys = COALESCE(%s::jsonb, result_object_keys),
                     error_message = %s,
+                    processing_worker_id = CASE
+                      WHEN %s IN ('COMPLETED', 'FAILED') THEN NULL
+                      ELSE processing_worker_id
+                    END,
+                    processing_heartbeat_at = CASE
+                      WHEN %s IN ('COMPLETED', 'FAILED') THEN NULL
+                      ELSE NOW()
+                    END,
                     updated_at = NOW()
                 WHERE id = %s
+                  AND processing_worker_id = %s
                 """,
                 (
                     status,
                     progress,
-                    json.dumps(result_keys) if result_keys else None,
+                    serialized_result_keys,
                     error_message,
+                    status,
+                    status,
                     job_id,
+                    worker_id,
                 ),
             )
+            job_was_updated = cursor.rowcount == 1
+
+    if not job_was_updated:
+        raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")

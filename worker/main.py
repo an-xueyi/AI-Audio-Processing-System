@@ -11,12 +11,15 @@ from config import (
     WORKER_ID,
     MAX_PROCESSING_ATTEMPTS,
     RETRY_BACKOFF_SECONDS,
+    JOB_LEASE_TIMEOUT_SECONDS,
 )
-from database import get_job_status, update_job_status
+from database import begin_job_attempt, claim_job, update_job_status
+from lease import JobLeaseHeartbeat
 from processing import create_job_workspace, process_audio_job
 from messaging import publish_dead_letter
 
 shutdown_requested = False
+claim_retry_interval_seconds = max(1, min(RETRY_BACKOFF_SECONDS, 10))
 
 
 def request_shutdown(signal_number, _frame):
@@ -26,6 +29,26 @@ def request_shutdown(signal_number, _frame):
         f"Worker {WORKER_ID} received signal {signal_number}. "
         "It will stop after its current job."
     )
+
+
+def wait_for_job_claim(job_id: str) -> tuple[bool, str | None]:
+    while not shutdown_requested:
+        job_was_claimed, current_status = claim_job(
+            job_id,
+            WORKER_ID,
+            JOB_LEASE_TIMEOUT_SECONDS,
+        )
+
+        if job_was_claimed or current_status in (None, "COMPLETED", "FAILED"):
+            return job_was_claimed, current_status
+
+        print(
+            f"Job {job_id} is currently owned by another worker. "
+            f"Checking again in {claim_retry_interval_seconds} seconds."
+        )
+        time.sleep(claim_retry_interval_seconds)
+
+    return False, None
 
 
 signal.signal(signal.SIGTERM, request_shutdown)
@@ -62,58 +85,90 @@ try:
         print(f"Worker {WORKER_ID} received job:")
         print(job)
 
-        current_status = get_job_status(job_id)
+        job_was_claimed, current_status = wait_for_job_claim(job_id)
+
+        if shutdown_requested:
+            break
 
         if current_status is None:
             print(f"Skipping unknown job {job_id}")
             consumer.commit(message=message, asynchronous=False)
             continue
 
-        if current_status == "COMPLETED":
-            print(f"Skipping already completed job {job_id}")
+        if not job_was_claimed:
+            print(
+                f"Skipping job {job_id}; its current status is "
+                f"{current_status} and it is not available to claim"
+            )
             consumer.commit(message=message, asynchronous=False)
             continue
 
         job_workspace = None
 
         try:
-            for attempt in range(1, MAX_PROCESSING_ATTEMPTS + 1):
-                job_workspace = create_job_workspace(job_id)
-                try:
-                    update_job_status(job_id, "PROCESSING", 10)
-                    print(
-                        f"Processing job {job_id}, "
-                        f"attempt {attempt}/{MAX_PROCESSING_ATTEMPTS}"
-                    )
+            with JobLeaseHeartbeat(job_id, WORKER_ID):
+                for attempt in range(1, MAX_PROCESSING_ATTEMPTS + 1):
+                    job_workspace = create_job_workspace(job_id)
+                    recorded_attempt = begin_job_attempt(job_id, WORKER_ID)
 
-                    result_keys = process_audio_job(
-                        job_id, input_object_key, job_workspace
-                    )
-                    update_job_status(job_id, "COMPLETED", 100, result_keys)
-                    print(f"Job {job_id} marked as COMPLETED")
-                    break
+                    try:
+                        print(
+                            f"Processing job {job_id}, local attempt "
+                            f"{attempt}/{MAX_PROCESSING_ATTEMPTS}, "
+                            f"recorded attempt {recorded_attempt}"
+                        )
 
-                except Exception as error:
-                    error_message = str(error)
-
-                    if attempt < MAX_PROCESSING_ATTEMPTS:
-                        delay = RETRY_BACKOFF_SECONDS * attempt
+                        result_keys = process_audio_job(
+                            job_id,
+                            input_object_key,
+                            job_workspace,
+                            WORKER_ID,
+                        )
                         update_job_status(
-                            job_id, "RETRYING", 10, error_message=error_message
+                            job_id,
+                            WORKER_ID,
+                            "COMPLETED",
+                            100,
+                            result_keys,
+                        )
+                        print(f"Job {job_id} marked as COMPLETED")
+                        break
+
+                    except Exception as error:
+                        error_message = str(error)
+
+                        if attempt < MAX_PROCESSING_ATTEMPTS:
+                            delay = RETRY_BACKOFF_SECONDS * attempt
+                            update_job_status(
+                                job_id,
+                                WORKER_ID,
+                                "RETRYING",
+                                10,
+                                error_message=error_message,
+                            )
+                            print(
+                                f"Job {job_id} attempt {attempt} failed. "
+                                f"Retrying in {delay} seconds."
+                            )
+                            time.sleep(delay)
+                            continue
+
+                        publish_dead_letter(
+                            job,
+                            error_message,
+                            MAX_PROCESSING_ATTEMPTS,
+                        )
+                        update_job_status(
+                            job_id,
+                            WORKER_ID,
+                            "FAILED",
+                            0,
+                            error_message=error_message,
                         )
                         print(
-                            f"Job {job_id} attempt {attempt} failed. "
-                            f"Retrying in {delay} seconds."
+                            f"Job {job_id} marked as FAILED "
+                            "and sent to the dead-letter topic"
                         )
-                        time.sleep(delay)
-                        continue
-
-                    publish_dead_letter(job, error_message, MAX_PROCESSING_ATTEMPTS)
-                    update_job_status(job_id, "FAILED", 0, error_message=error_message)
-                    print(
-                        f"Job {job_id} marked as FAILED "
-                        "and sent to the dead-letter topic"
-                    )
 
         finally:
             if job_workspace is not None:

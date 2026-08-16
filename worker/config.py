@@ -34,3 +34,19 @@ RETRY_BACKOFF_SECONDS = max(
     0,
     int(os.getenv("RETRY_BACKOFF_SECONDS", "5")),
 )
+
+JOB_LEASE_TIMEOUT_SECONDS = max(
+    60,
+    int(os.getenv("JOB_LEASE_TIMEOUT_SECONDS", "300")),
+)
+
+JOB_HEARTBEAT_INTERVAL_SECONDS = max(
+    5,
+    int(os.getenv("JOB_HEARTBEAT_INTERVAL_SECONDS", "30")),
+)
+
+if JOB_HEARTBEAT_INTERVAL_SECONDS >= JOB_LEASE_TIMEOUT_SECONDS:
+    raise RuntimeError(
+        "JOB_HEARTBEAT_INTERVAL_SECONDS must be less than "
+        "JOB_LEASE_TIMEOUT_SECONDS"
+    )

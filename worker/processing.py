@@ -41,14 +41,15 @@ def process_audio_job(
     job_id: str,
     input_object_key: str,
     job_workspace: Path,
+    worker_id: str,
 ) -> dict:
     input_path = download_input_file(input_object_key, job_workspace)
     print(f"Downloaded input file to {input_path}")
 
-    update_job_status(job_id, "PROCESSING", 40)
+    update_job_status(job_id, worker_id, "PROCESSING", 40)
 
     if PROCESSING_MODE == "demucs":
-        update_job_status(job_id, "PROCESSING", 60)
+        update_job_status(job_id, worker_id, "PROCESSING", 60)
         separated_dir = run_demucs(input_path, job_workspace)
         return upload_demucs_results(job_id, separated_dir)
 
