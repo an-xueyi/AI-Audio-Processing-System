@@ -33,6 +33,17 @@ export type ApiErrorResponse = {
 
 export type JobWebSocketMessage =
   | {
+      type: "connection_ready";
+      heartbeatIntervalSeconds: number;
+    }
+  | {
+      type: "subscribed";
+      jobId: string;
+    }
+  | {
+      type: "unsubscribed";
+    }
+  | {
       type: "job_update";
       job: Job;
     }

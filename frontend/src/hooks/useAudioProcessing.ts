@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   createBrowserSession,
   createProcessingJob,
@@ -7,9 +7,9 @@ import {
   requestPresignedUpload,
   uploadAudioFile,
 } from "../api/audioProcessing";
-import { WS_BASE_URL } from "../config";
-import type { HealthResponse, Job, JobWebSocketMessage } from "../types";
+import type { HealthResponse, Job } from "../types";
 import { getAudioContentType } from "../utils/audio";
+import { useJobWebSocket } from "./useJobWebSocket";
 
 export function useAudioProcessing() {
   const [backendHealth, setBackendHealth] = useState<HealthResponse | null>(
@@ -24,7 +24,43 @@ export function useAudioProcessing() {
     string,
     string
   > | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
+
+  const handleJobUpdate = useCallback(async (updatedJob: Job) => {
+    setJob(updatedJob);
+
+    if (updatedJob.status === "COMPLETED") {
+      try {
+        const urls = await fetchDownloadUrls(updatedJob.id);
+        setDownloadUrls(urls);
+        setMessage("Job completed! Download links are ready.");
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Job completed, but download links could not be loaded.",
+        );
+      }
+      return;
+    }
+
+    if (updatedJob.status === "FAILED") {
+      setMessage(
+        updatedJob.error_message
+          ? `Job failed: ${updatedJob.error_message}`
+          : "Job failed.",
+      );
+      return;
+    }
+
+    setMessage(
+      `Job is ${updatedJob.status}. Progress: ${updatedJob.progress}%`,
+    );
+  }, []);
+
+  const { subscribeToJob, unsubscribeFromJob } = useJobWebSocket({
+    onJobUpdate: handleJobUpdate,
+    onStatusMessage: setMessage,
+  });
 
   useEffect(() => {
     let isActive = true;
@@ -51,81 +87,11 @@ export function useAudioProcessing() {
 
     return () => {
       isActive = false;
-      socketRef.current?.close();
     };
   }, []);
 
-  function connectJobWebSocket(jobId: string) {
-    socketRef.current?.close();
-
-    const socket = new WebSocket(`${WS_BASE_URL}/ws/jobs?jobId=${jobId}`);
-    socketRef.current = socket;
-    let shouldShowClosedMessage = true;
-
-    socket.onopen = () => {
-      setMessage("Connected to job status updates.");
-    };
-
-    socket.onmessage = async (event) => {
-      try {
-        const webSocketMessage = JSON.parse(
-          event.data,
-        ) as JobWebSocketMessage;
-
-        if (webSocketMessage.type === "error") {
-          setMessage(webSocketMessage.error);
-          shouldShowClosedMessage = false;
-          socket.close();
-          return;
-        }
-
-        const updatedJob = webSocketMessage.job;
-        setJob(updatedJob);
-
-        if (updatedJob.status === "COMPLETED") {
-          const urls = await fetchDownloadUrls(updatedJob.id);
-          setDownloadUrls(urls);
-          setMessage("Job completed! Download links are ready.");
-          shouldShowClosedMessage = false;
-          socket.close();
-          return;
-        }
-
-        if (updatedJob.status === "FAILED") {
-          setMessage(
-            updatedJob.error_message
-              ? `Job failed: ${updatedJob.error_message}`
-              : "Job failed.",
-          );
-          shouldShowClosedMessage = false;
-          socket.close();
-          return;
-        }
-
-        setMessage(
-          `Job is ${updatedJob.status}. Progress: ${updatedJob.progress}%`,
-        );
-      } catch (error) {
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : "Could not read the job update.",
-        );
-      }
-    };
-
-    socket.onerror = () => {
-      setMessage("WebSocket connection failed.");
-    };
-
-    socket.onclose = () => {
-      if (shouldShowClosedMessage) {
-        setMessage("WebSocket connection closed.");
-      }
-    };
-  }
-
   function selectFile(file: File | null) {
+    unsubscribeFromJob();
     setSelectedFile(file);
     setJob(null);
     setDownloadUrls(null);
@@ -174,7 +140,7 @@ export function useAudioProcessing() {
       );
 
       setJob(createdJob);
-      connectJobWebSocket(createdJob.id);
+      subscribeToJob(createdJob.id);
       setMessage("Job created. The worker will process it in the background.");
     } catch (error) {
       setMessage(

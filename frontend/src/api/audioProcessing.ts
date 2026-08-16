@@ -120,3 +120,17 @@ export async function fetchDownloadUrls(
   const data = (await response.json()) as DownloadUrlsResponse;
   return data.downloadUrls;
 }
+
+export async function fetchJob(jobId: string): Promise<Job> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await getApiErrorMessage(response, "Failed to fetch job status"),
+    );
+  }
+
+  return (await response.json()) as Job;
+}
