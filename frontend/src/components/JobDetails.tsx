@@ -1,4 +1,10 @@
-import type { Job } from "../types";
+import type { Job, JobStatus } from "../types";
+
+const cancellableStatuses: ReadonlySet<JobStatus> = new Set([
+  "PENDING",
+  "PROCESSING",
+  "RETRYING",
+]);
 
 type JobDetailsProps = {
   isCancelling: boolean;
@@ -7,7 +13,7 @@ type JobDetailsProps = {
 };
 
 export function JobDetails({ isCancelling, job, onCancel }: JobDetailsProps) {
-  const canCancel = ["PENDING", "PROCESSING", "RETRYING"].includes(job.status);
+  const canCancel = cancellableStatuses.has(job.status);
 
   return (
     <section className="panel">

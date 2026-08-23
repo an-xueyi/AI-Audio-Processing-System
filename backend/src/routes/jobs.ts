@@ -1,18 +1,18 @@
 import { Router } from "express";
-import { pool } from "../db.js";
-import { jobCreatedTopic, jobStatusTopic } from "../kafka/topics.js";
-import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { z } from "zod";
 import {
-  allowedAudioContentTypes,
-  maxUploadBytes,
-} from "../config/upload.js";
-import { bucketName, s3Client, s3PublicClient } from "../storage/s3.js";
+  createResultDownloadUrls,
+  UploadValidationError,
+  verifyOwnedAudioUpload,
+} from "../services/audioStorage.js";
+import {
+  cancelJob,
+  createJob,
+  findOwnedJob,
+} from "../services/jobService.js";
 
 const router = Router();
-const uuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidSchema = z.string().uuid();
 
 const createJobSchema = z
   .object({
@@ -40,217 +40,95 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    const object = await s3Client.send(
-      new HeadObjectCommand({
-        Bucket: bucketName,
-        Key: inputObjectKey,
-      }),
-    );
-
-    if (object.Metadata?.["owner-id"] !== req.sessionId) {
-      return res.status(400).json({
-        error: "The uploaded object has invalid ownership metadata",
-      });
+    await verifyOwnedAudioUpload(req.sessionId, inputObjectKey);
+  } catch (error) {
+    if (error instanceof UploadValidationError) {
+      return res.status(400).json({ error: error.message });
     }
 
-    if (
-      !object.ContentType ||
-      !allowedAudioContentTypes.has(object.ContentType) ||
-      !object.ContentLength ||
-      object.ContentLength > maxUploadBytes
-    ) {
-      return res.status(400).json({
-        error: "The uploaded object does not satisfy the audio upload policy",
-      });
-    }
-  } catch (error) {
-    return res.status(400).json({
-      error: "The uploaded audio object could not be verified",
-    });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const result = await client.query(
-      `INSERT INTO jobs 
-      (owner_id, original_file_name, input_object_key, status, progress)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, original_file_name, input_object_key, status, progress,
-                result_object_keys, error_message, created_at, updated_at`,
-      [req.sessionId, originalFileName, inputObjectKey, "PENDING", 0],
-    );
-
-    const job = result.rows[0];
-
-    const eventPayload = {
-      jobId: job.id,
-      inputObjectKey: job.input_object_key,
-      originalFileName: job.original_file_name,
-    };
-
-    await client.query(
-      `INSERT INTO outbox_events 
-      (topic, event_key, payload) 
-      VALUES ($1, $2, $3::jsonb)`,
-      [jobCreatedTopic, job.id, JSON.stringify(eventPayload)],
-    );
-
-    await client.query("COMMIT");
-
-    res.status(201).json(job);
-  } catch (error) {
-    await client.query("ROLLBACK");
     throw error;
-  } finally {
-    client.release();
   }
+
+  const job = await createJob(
+    req.sessionId,
+    originalFileName,
+    inputObjectKey,
+  );
+  res.status(201).json(job);
 });
 
 router.post("/:id/cancel", async (req, res) => {
-  const { id } = req.params;
+  const parsedJobId = uuidSchema.safeParse(req.params.id);
 
-  if (!uuidPattern.test(id)) {
+  if (!parsedJobId.success) {
     return res.status(400).json({ error: "Invalid job id" });
   }
 
-  const client = await pool.connect();
+  const result = await cancelJob(parsedJobId.data, req.sessionId);
 
-  try {
-    await client.query("BEGIN");
-
-    const result = await client.query(
-      `UPDATE jobs
-       SET status = 'CANCELLED',
-           processing_worker_id = NULL,
-           processing_heartbeat_at = NULL,
-           error_message = NULL,
-           updated_at = NOW()
-       WHERE id = $1
-         AND owner_id = $2
-         AND status IN ('PENDING', 'PROCESSING', 'RETRYING')
-       RETURNING id, original_file_name, input_object_key, status, progress,
-                 result_object_keys, error_message, created_at, updated_at`,
-      [id, req.sessionId],
-    );
-
-    if (result.rows.length === 0) {
-      await client.query("ROLLBACK");
-
-      const existingJob = await pool.query(
-        "SELECT status FROM jobs WHERE id = $1 AND owner_id = $2",
-        [id, req.sessionId],
-      );
-
-      if (existingJob.rows.length === 0) {
-        return res.status(404).json({ error: "Job not found" });
-      }
-
-      return res.status(409).json({
-        error: `A ${existingJob.rows[0].status} job cannot be cancelled`,
-      });
-    }
-
-    await client.query(
-      `INSERT INTO outbox_events (topic, event_key, payload)
-       VALUES ($1, $2, jsonb_build_object('jobId', $2::text))`,
-      [jobStatusTopic, id],
-    );
-
-    await client.query("COMMIT");
-    res.json(result.rows[0]);
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-});
-
-type ResultObjectKeys = Record<string, string>;
-
-router.get("/:id/downloads", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!uuidPattern.test(id)) {
-      return res.status(400).json({
-        error: "Invalid job id",
-      });
-    }
-
-    const result = await pool.query(
-      `SELECT id, status, progress, result_object_keys 
-      FROM jobs 
-      WHERE id = $1 AND owner_id = $2`,
-      [id, req.sessionId],
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Job not found" });
-    }
-
-    const job = result.rows[0];
-
-    if (job.status !== "COMPLETED") {
-      return res.status(409).json({
-        error: "Job is not completed yet",
-        status: job.status,
-        progress: job.progress,
-      });
-    }
-    const resultObjectKeys = job.result_object_keys as ResultObjectKeys | null;
-
-    if (!resultObjectKeys) {
-      return res
-        .status(409)
-        .json({ error: "Job is completed but has no result files" });
-    }
-
-    const downloadUrls: Record<string, string> = {};
-
-    for (const [stemName, objectKey] of Object.entries(resultObjectKeys)) {
-      const command = new GetObjectCommand({
-        Bucket: bucketName,
-        Key: objectKey,
-      });
-
-      downloadUrls[stemName] = await getSignedUrl(s3PublicClient, command, {
-        expiresIn: 60 * 5,
-      });
-    }
-
-    res.json({ jobId: job.id, downloadUrls, expiresInSeconds: 300 });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to generate download URLs" });
-  }
-});
-
-router.get("/:id", async (req, res) => {
-  const { id } = req.params;
-
-  if (!uuidPattern.test(id)) {
-    return res.status(400).json({
-      error: "Invalid job id",
-    });
-  }
-
-  const result = await pool.query(
-    `SELECT id, original_file_name, input_object_key, status, progress,
-            result_object_keys, error_message, created_at, updated_at
-     FROM jobs
-     WHERE id = $1 AND owner_id = $2`,
-    [id, req.sessionId],
-  );
-
-  if (result.rows.length === 0) {
+  if (result.outcome === "not_found") {
     return res.status(404).json({ error: "Job not found" });
   }
 
-  res.json(result.rows[0]);
+  if (result.outcome === "not_cancellable") {
+    return res.status(409).json({
+      error: `A ${result.status} job cannot be cancelled`,
+    });
+  }
+
+  res.json(result.job);
+});
+
+router.get("/:id/downloads", async (req, res) => {
+  const parsedJobId = uuidSchema.safeParse(req.params.id);
+
+  if (!parsedJobId.success) {
+    return res.status(400).json({ error: "Invalid job id" });
+  }
+
+  const job = await findOwnedJob(parsedJobId.data, req.sessionId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  if (job.status !== "COMPLETED") {
+    return res.status(409).json({
+      error: "Job is not completed yet",
+      status: job.status,
+      progress: job.progress,
+    });
+  }
+
+  if (!job.result_object_keys) {
+    return res.status(409).json({
+      error: "Job is completed but has no result files",
+    });
+  }
+
+  const downloadUrls = await createResultDownloadUrls(job.result_object_keys);
+
+  res.json({
+    jobId: job.id,
+    downloadUrls,
+    expiresInSeconds: 60 * 5,
+  });
+});
+
+router.get("/:id", async (req, res) => {
+  const parsedJobId = uuidSchema.safeParse(req.params.id);
+
+  if (!parsedJobId.success) {
+    return res.status(400).json({ error: "Invalid job id" });
+  }
+
+  const job = await findOwnedJob(parsedJobId.data, req.sessionId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  res.json(job);
 });
 
 export default router;

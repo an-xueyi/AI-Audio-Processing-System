@@ -32,6 +32,8 @@ export async function publishPendingOutboxEvents() {
     try {
       await client.query("BEGIN");
 
+      // Multiple backend replicas may publish concurrently. Locked rows are
+      // skipped so each replica can claim a different batch without waiting.
       const result = await client.query(
         `SELECT id, topic, event_key, payload 
         FROM outbox_events 

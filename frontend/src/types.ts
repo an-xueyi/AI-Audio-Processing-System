@@ -11,11 +11,19 @@ export type PresignResponse = {
   maxUploadBytes: number;
 };
 
+export type JobStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "RETRYING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
 export type Job = {
   id: string;
   original_file_name: string;
   input_object_key: string;
-  status: string;
+  status: JobStatus;
   progress: number;
   result_object_keys: Record<string, string> | null;
   error_message: string | null;

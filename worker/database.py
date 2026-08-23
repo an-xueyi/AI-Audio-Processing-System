@@ -23,6 +23,7 @@ def is_job_cancelled(job_id: str) -> bool:
 
 
 def enqueue_job_status_event(cursor, job_id: str) -> None:
+    """Add a status event to the caller's existing database transaction."""
     cursor.execute(
         """
         INSERT INTO outbox_events (topic, event_key, payload)
