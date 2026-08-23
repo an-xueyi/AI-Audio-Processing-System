@@ -2,6 +2,7 @@ import json
 
 import psycopg
 
+from cancellation import JobCancelled
 from config import DATABASE_URL, JOB_STATUS_TOPIC
 
 
@@ -10,6 +11,15 @@ def require_database_url() -> str:
         raise RuntimeError("DATABASE_URL is missing")
 
     return DATABASE_URL
+
+
+def is_job_cancelled(job_id: str) -> bool:
+    with psycopg.connect(require_database_url()) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status FROM jobs WHERE id = %s", (job_id,))
+            job = cursor.fetchone()
+
+    return job is not None and job[0] == "CANCELLED"
 
 
 def enqueue_job_status_event(cursor, job_id: str) -> None:
@@ -166,6 +176,9 @@ def update_job_status(
 
             if job_was_updated:
                 enqueue_job_status_event(cursor, job_id)
+
+    if not job_was_updated and is_job_cancelled(job_id):
+        raise JobCancelled(f"Job {job_id} was cancelled")
 
     if not job_was_updated:
         raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")

@@ -44,7 +44,9 @@ function clearSubscription(socket: JobSocket) {
 }
 
 function isTerminalStatus(status: string) {
-  return status === "COMPLETED" || status === "FAILED";
+  return (
+    status === "COMPLETED" || status === "FAILED" || status === "CANCELLED"
+  );
 }
 
 function sendJobUpdate(

@@ -8,8 +8,10 @@ import { useAudioProcessing } from "./hooks/useAudioProcessing";
 function App() {
   const {
     backendHealth,
+    cancelJob,
     downloadUrls,
     isUploading,
+    isCancelling,
     job,
     message,
     selectedFile,
@@ -33,7 +35,13 @@ function App() {
         onStartProcessing={startProcessing}
       />
 
-      {job && <JobDetails job={job} />}
+      {job && (
+        <JobDetails
+          isCancelling={isCancelling}
+          job={job}
+          onCancel={cancelJob}
+        />
+      )}
       {downloadUrls && <DownloadResults downloadUrls={downloadUrls} />}
     </main>
   );

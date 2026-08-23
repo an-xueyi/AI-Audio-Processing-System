@@ -5,9 +5,6 @@ dotenv.config();
 
 const kafkaBroker = process.env.KAFKA_BROKER || "localhost:9092";
 
-export const jobCreatedTopic =
-  process.env.KAFKA_JOB_CREATED_TOPIC || "audio.jobs.created";
-
 const kafka = new Kafka({
   clientId: "audio-backend",
   brokers: [kafkaBroker],

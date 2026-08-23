@@ -104,6 +104,19 @@ export async function createProcessingJob(
   return (await response.json()) as Job;
 }
 
+export async function cancelProcessingJob(jobId: string): Promise<Job> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/cancel`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(await getApiErrorMessage(response, "Failed to cancel job"));
+  }
+
+  return (await response.json()) as Job;
+}
+
 export async function fetchDownloadUrls(
   jobId: string,
 ): Promise<Record<string, string>> {

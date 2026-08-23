@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
-import { jobCreatedTopic } from "../kafka/producer.js";
+import { jobCreatedTopic, jobStatusTopic } from "../kafka/topics.js";
 import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { z } from "zod";
@@ -101,6 +101,66 @@ router.post("/", async (req, res) => {
     await client.query("COMMIT");
 
     res.status(201).json(job);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/:id/cancel", async (req, res) => {
+  const { id } = req.params;
+
+  if (!uuidPattern.test(id)) {
+    return res.status(400).json({ error: "Invalid job id" });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `UPDATE jobs
+       SET status = 'CANCELLED',
+           processing_worker_id = NULL,
+           processing_heartbeat_at = NULL,
+           error_message = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+         AND owner_id = $2
+         AND status IN ('PENDING', 'PROCESSING', 'RETRYING')
+       RETURNING id, original_file_name, input_object_key, status, progress,
+                 result_object_keys, error_message, created_at, updated_at`,
+      [id, req.sessionId],
+    );
+
+    if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      const existingJob = await pool.query(
+        "SELECT status FROM jobs WHERE id = $1 AND owner_id = $2",
+        [id, req.sessionId],
+      );
+
+      if (existingJob.rows.length === 0) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+
+      return res.status(409).json({
+        error: `A ${existingJob.rows[0].status} job cannot be cancelled`,
+      });
+    }
+
+    await client.query(
+      `INSERT INTO outbox_events (topic, event_key, payload)
+       VALUES ($1, $2, jsonb_build_object('jobId', $2::text))`,
+      [jobStatusTopic, id],
+    );
+
+    await client.query("COMMIT");
+    res.json(result.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

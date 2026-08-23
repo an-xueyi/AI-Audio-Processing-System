@@ -1,9 +1,8 @@
 import { Kafka } from "kafkajs";
 import { z } from "zod";
+import { jobStatusTopic } from "./topics.js";
 
 const kafkaBroker = process.env.KAFKA_BROKER || "localhost:9092";
-const jobStatusTopic =
-  process.env.KAFKA_JOB_STATUS_TOPIC || "audio.jobs.status";
 const groupPrefix =
   process.env.KAFKA_STATUS_CONSUMER_GROUP_PREFIX || "audio-backend-status";
 const instanceId = process.env.HOSTNAME || `local-${process.pid}`;

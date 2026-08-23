@@ -4,6 +4,7 @@ import shutil
 import time
 from confluent_kafka import Consumer, KafkaException
 
+from cancellation import JobCancelled
 from config import (
     KAFKA_BROKER,
     JOB_CREATED_TOPIC,
@@ -39,7 +40,12 @@ def wait_for_job_claim(job_id: str) -> tuple[bool, str | None]:
             JOB_LEASE_TIMEOUT_SECONDS,
         )
 
-        if job_was_claimed or current_status in (None, "COMPLETED", "FAILED"):
+        if job_was_claimed or current_status in (
+            None,
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+        ):
             return job_was_claimed, current_status
 
         print(
@@ -109,9 +115,9 @@ try:
             with JobLeaseHeartbeat(job_id, WORKER_ID):
                 for attempt in range(1, MAX_PROCESSING_ATTEMPTS + 1):
                     job_workspace = create_job_workspace(job_id)
-                    recorded_attempt = begin_job_attempt(job_id, WORKER_ID)
 
                     try:
+                        recorded_attempt = begin_job_attempt(job_id, WORKER_ID)
                         print(
                             f"Processing job {job_id}, local attempt "
                             f"{attempt}/{MAX_PROCESSING_ATTEMPTS}, "
@@ -132,6 +138,10 @@ try:
                             result_keys,
                         )
                         print(f"Job {job_id} marked as COMPLETED")
+                        break
+
+                    except JobCancelled:
+                        print(f"Job {job_id} processing stopped after cancellation")
                         break
 
                     except Exception as error:

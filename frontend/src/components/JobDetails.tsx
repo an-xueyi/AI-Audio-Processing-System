@@ -1,10 +1,14 @@
 import type { Job } from "../types";
 
 type JobDetailsProps = {
+  isCancelling: boolean;
   job: Job;
+  onCancel: () => void;
 };
 
-export function JobDetails({ job }: JobDetailsProps) {
+export function JobDetails({ isCancelling, job, onCancel }: JobDetailsProps) {
+  const canCancel = ["PENDING", "PROCESSING", "RETRYING"].includes(job.status);
+
   return (
     <section className="panel">
       <div className="section-header">
@@ -19,6 +23,9 @@ export function JobDetails({ job }: JobDetailsProps) {
         <p>
           <strong>Progress:</strong> {job.progress}%
         </p>
+        <progress className="job-progress" max="100" value={job.progress}>
+          {job.progress}%
+        </progress>
         <p>
           <strong>Input Object Key:</strong> {job.input_object_key}
         </p>
@@ -28,6 +35,17 @@ export function JobDetails({ job }: JobDetailsProps) {
           </p>
         )}
       </div>
+
+      {canCancel && (
+        <button
+          className="secondary-button cancel-job-button"
+          type="button"
+          onClick={onCancel}
+          disabled={isCancelling}
+        >
+          {isCancelling ? "Cancelling..." : "Cancel Processing"}
+        </button>
+      )}
     </section>
   );
 }

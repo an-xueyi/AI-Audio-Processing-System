@@ -56,7 +56,11 @@ def upload_mock_results(job_id: str, input_path: Path) -> dict:
     return result_keys
 
 
-def upload_demucs_results(job_id: str, separated_dir: Path) -> dict:
+def upload_demucs_results(
+    job_id: str,
+    separated_dir: Path,
+    on_stem_uploaded=None,
+) -> dict:
     stem_paths = sorted(separated_dir.glob("*.wav"))
 
     if not stem_paths:
@@ -66,7 +70,7 @@ def upload_demucs_results(job_id: str, separated_dir: Path) -> dict:
 
     result_keys = {}
 
-    for stem_path in stem_paths:
+    for index, stem_path in enumerate(stem_paths, start=1):
         stem_name = stem_path.stem
         object_key = f"results/{job_id}/{stem_name}.wav"
 
@@ -78,5 +82,8 @@ def upload_demucs_results(job_id: str, separated_dir: Path) -> dict:
         )
 
         result_keys[stem_name] = object_key
+
+        if on_stem_uploaded is not None:
+            on_stem_uploaded(index, len(stem_paths))
 
     return result_keys

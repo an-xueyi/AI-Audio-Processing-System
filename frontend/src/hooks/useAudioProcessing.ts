@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  cancelProcessingJob,
   createBrowserSession,
   createProcessingJob,
   fetchBackendHealth,
@@ -19,6 +20,7 @@ export function useAudioProcessing() {
   const [job, setJob] = useState<Job | null>(null);
   const [message, setMessage] = useState("Checking backend...");
   const [isUploading, setIsUploading] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const [downloadUrls, setDownloadUrls] = useState<Record<
     string,
@@ -49,6 +51,11 @@ export function useAudioProcessing() {
           ? `Job failed: ${updatedJob.error_message}`
           : "Job failed.",
       );
+      return;
+    }
+
+    if (updatedJob.status === "CANCELLED") {
+      setMessage("Job processing was cancelled.");
       return;
     }
 
@@ -127,11 +134,7 @@ export function useAudioProcessing() {
       );
 
       setMessage("Uploading file to object storage...");
-      await uploadAudioFile(
-        presignData.uploadUrl,
-        selectedFile,
-        contentType,
-      );
+      await uploadAudioFile(presignData.uploadUrl, selectedFile, contentType);
 
       setMessage("Creating processing job...");
       const createdJob = await createProcessingJob(
@@ -151,10 +154,33 @@ export function useAudioProcessing() {
     }
   }
 
+  async function cancelJob() {
+    if (!job || isCancelling) {
+      return;
+    }
+
+    try {
+      setIsCancelling(true);
+      setMessage("Cancelling job processing...");
+      const cancelledJob = await cancelProcessingJob(job.id);
+      setJob(cancelledJob);
+      setDownloadUrls(null);
+      setMessage("Job processing was cancelled.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Failed to cancel job.",
+      );
+    } finally {
+      setIsCancelling(false);
+    }
+  }
+
   return {
     backendHealth,
+    cancelJob,
     downloadUrls,
     isUploading,
+    isCancelling,
     job,
     message,
     selectedFile,
