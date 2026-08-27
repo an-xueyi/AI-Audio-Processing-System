@@ -38,8 +38,14 @@ export async function createJob(
       throw new Error("PostgreSQL did not return the created job");
     }
 
-    // The job and its Kafka event commit together. The outbox publisher can
-    // safely retry Kafka without creating a job that has no corresponding event.
+    /*
+     * PostgreSQL cannot participate directly in the same transaction as Kafka.
+     * Writing the job and an outbox row in one database transaction closes the
+     * dangerous gap between "job saved" and "Kafka event sent." After COMMIT,
+     * a background publisher repeatedly sends pending outbox rows to Kafka. If
+     * the database transaction rolls back, neither record exists; if Kafka is
+     * temporarily unavailable, the durable outbox row remains available.
+     */
     await client.query(
       `INSERT INTO outbox_events (topic, event_key, payload)
        VALUES ($1, $2, $3::jsonb)`,

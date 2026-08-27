@@ -22,6 +22,12 @@ export function startJobSubscription({
   onJobUpdate,
   onStatusMessage,
 }: JobSubscriptionOptions) {
+  /*
+   * All connection state belongs to one job subscription. The cleanup function
+   * returned at the bottom changes stopped to true, clears every timer, and
+   * closes the socket. React calls that cleanup when the component no longer
+   * watches this job, preventing old sockets from updating the new screen.
+   */
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let connectionTimer: number | null = null;
@@ -78,8 +84,12 @@ export function startJobSubscription({
       return;
     }
 
-    // WebSockets are the primary path. Polling starts only after repeated
-    // reconnect failures so temporary network problems do not hide job updates.
+    /*
+     * WebSockets are the primary path because the server can push an update as
+     * soon as a worker changes the job. After three failed reconnections, HTTP
+     * polling becomes a backup. It is less efficient, but it keeps the page
+     * useful when a network or proxy blocks WebSockets.
+     */
     onStatusMessage(
       "Realtime connection is unavailable. Using status polling.",
     );
@@ -94,6 +104,8 @@ export function startJobSubscription({
       return;
     }
 
+    // Each failure waits longer before the next attempt. Capping the array index
+    // keeps later attempts at 10 seconds instead of growing without a limit.
     const delayIndex = Math.min(
       reconnectAttempt,
       reconnectDelaysMs.length - 1,

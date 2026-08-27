@@ -18,6 +18,14 @@ const kafka = new Kafka({
   brokers: [kafkaBroker],
 });
 
+/*
+ * Kafka normally gives each message to only one consumer inside a consumer
+ * group. That behavior is correct for Python workers because a processing job
+ * should run once. It is different for backend WebSocket servers: every backend
+ * replica may have browsers connected to it, so every replica must hear every
+ * status event and notify its own clients. Adding instanceId creates one group
+ * per backend replica, turning these status events into a broadcast.
+ */
 const consumer = kafka.consumer({
   groupId: `${groupPrefix}-${instanceId}`,
 });
@@ -29,6 +37,8 @@ export async function startJobStatusConsumer(
   notifyJobChanged: (jobId: string) => Promise<void>,
 ) {
   if (!startPromise) {
+    // Save the startup promise so two callers cannot connect and start the same
+    // Kafka consumer twice. A failed start clears it so a later retry is allowed.
     startPromise = (async () => {
       await consumer.connect();
       await consumer.subscribe({
@@ -42,6 +52,8 @@ export async function startJobStatusConsumer(
             return;
           }
 
+          // Kafka messages are bytes. Convert those bytes to text, parse the
+          // JSON, and then validate its shape before trusting jobId.
           let parsedJson: unknown;
 
           try {

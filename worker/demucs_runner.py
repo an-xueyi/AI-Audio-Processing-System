@@ -8,6 +8,8 @@ EVENT_PREFIX = "DEMUCS_EVENT "
 
 
 def emit_event(event: dict) -> None:
+    # The prefix distinguishes machine-readable progress JSON from ordinary
+    # Demucs log lines. demucs_process.py parses only lines with this marker.
     print(f"{EVENT_PREFIX}{json.dumps(event)}", flush=True)
 
 
@@ -19,6 +21,9 @@ def main() -> None:
     args = parser.parse_args()
 
     def report_progress(progress_info: dict) -> None:
+        # Some Demucs models are bags containing multiple models. Progress for
+        # the current segment is combined with the completed model count to form
+        # one value between 0 and 1 for the complete separation operation.
         audio_length = max(int(progress_info["audio_length"]), 1)
         model_count = max(int(progress_info["models"]), 1)
         model_index = int(progress_info["model_idx_in_bag"])

@@ -19,6 +19,9 @@ let isPublishing = false;
 let publishInterval: NodeJS.Timeout | null = null;
 
 export async function publishPendingOutboxEvents() {
+  // setInterval does not wait for an asynchronous callback to finish. This flag
+  // prevents one backend process from starting a second publishing pass while
+  // its previous database transaction is still active.
   if (isPublishing) {
     return;
   }
@@ -32,8 +35,13 @@ export async function publishPendingOutboxEvents() {
     try {
       await client.query("BEGIN");
 
-      // Multiple backend replicas may publish concurrently. Locked rows are
-      // skipped so each replica can claim a different batch without waiting.
+      /*
+       * Multiple backend replicas run this publisher at the same time.
+       * FOR UPDATE locks each selected row until COMMIT or ROLLBACK, while
+       * SKIP LOCKED makes another replica ignore those claimed rows and select
+       * different work. This provides horizontal scaling without a second
+       * coordinator service deciding which backend owns each outbox event.
+       */
       const result = await client.query(
         `SELECT id, topic, event_key, payload 
         FROM outbox_events 
@@ -47,6 +55,8 @@ export async function publishPendingOutboxEvents() {
 
       for (const event of events) {
         try {
+          // event_key becomes Kafka's message key. Jobs with the same ID are
+          // therefore routed consistently when the topic has many partitions.
           await producer.send({
             topic: event.topic,
             messages: [
@@ -67,6 +77,8 @@ export async function publishPendingOutboxEvents() {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
 
+          // Keep a failed event PENDING and record the error. The next polling
+          // pass can retry it instead of silently losing the job notification.
           await client.query(
             `UPDATE outbox_events 
             SET attempts = attempts + 1, last_error = $2 

@@ -25,6 +25,15 @@ import type { ErrorRequestHandler, RequestHandler } from "express";
 const app = express();
 
 app.disable("x-powered-by");
+/*
+ * In Docker, every public request passes through exactly one reverse proxy:
+ * Nginx. Trusting one proxy hop allows Express to read the browser address from
+ * X-Forwarded-For instead of seeing Nginx as the sender of every request. This
+ * matters to the rate limiter, which counts requests by client IP. The backend
+ * is not published directly to the host, so browsers cannot bypass Nginx and
+ * supply an untrusted forwarded address to the container.
+ */
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(
   cors({
@@ -43,9 +52,13 @@ app.use("/api/uploads", requireSession, uploadRateLimit, uploadsRouter);
 app.use("/api/jobs", requireSession, jobsRouter);
 
 const PORT = process.env.PORT || 4000;
+// Docker assigns a different HOSTNAME to each replica. Returning it from health
+// endpoints makes load balancing visible during local testing without exposing
+// secrets, source paths, or database information.
+const instanceId = process.env.HOSTNAME || `local-${process.pid}`;
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "backend" });
+  res.json({ status: "ok", service: "backend", instanceId });
 });
 
 app.get("/ready", async (req, res) => {
@@ -55,12 +68,14 @@ app.get("/ready", async (req, res) => {
     res.json({
       status: "ready",
       service: "backend",
+      instanceId,
       database: "connected",
     });
   } catch (error) {
     res.status(503).json({
       status: "not ready",
       service: "backend",
+      instanceId,
       database: "disconnected",
     });
   }

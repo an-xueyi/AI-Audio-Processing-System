@@ -29,6 +29,14 @@ def run_demucs(
     job_workspace: Path,
     worker_id: str,
 ) -> Path:
+    """
+    Run Demucs as a child process while this parent supervises the job.
+
+    Machine-learning inference is blocking CPU work. A separate process lets the
+    parent continue checking cancellation and translating progress events into
+    database updates. If the user cancels, the parent can terminate the child
+    instead of waiting for the entire song to finish.
+    """
     separated_dir = (
         job_workspace / "demucs-output" / DEMUCS_MODEL / input_path.stem
     )
@@ -61,6 +69,9 @@ def run_demucs(
         for line in process.stdout:
             output_queue.put(line)
 
+    # Reading a pipe can block until the child prints another line. A small
+    # thread performs that blocking read and places lines in a queue, leaving the
+    # main loop free to check the database for cancellation every half second.
     output_thread = threading.Thread(target=collect_output, daemon=True)
     output_thread.start()
 
@@ -93,8 +104,6 @@ def run_demucs(
             except queue.Empty:
                 pass
 
-            # Demucs runs separately so cancellation can stop CPU work even
-            # while the model is busy inside a long segment.
             raise_if_job_cancelled(job_id)
     except JobCancelled:
         _stop_process(process)

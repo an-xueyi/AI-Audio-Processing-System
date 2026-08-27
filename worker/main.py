@@ -28,15 +28,26 @@ def is_shutdown_requested() -> bool:
 
 
 def create_consumer() -> Consumer:
+    """
+    Create the Kafka consumer used by this worker process.
+
+    Every worker uses the same consumer group, so Kafka assigns each partition
+    to only one worker in that group. This distributes jobs across replicas
+    instead of asking every replica to process the same uploaded audio file.
+    """
     return Consumer(
         {
             "bootstrap.servers": KAFKA_BROKER,
             "group.id": KAFKA_CONSUMER_GROUP,
             "auto.offset.reset": "earliest",
-            # Commit only after the job is terminal or intentionally skipped.
-            # A crash before commit lets Kafka deliver the event again.
+            # Kafka offsets are saved manually after handle_job returns. If this
+            # process crashes during Demucs, the unsaved message can be delivered
+            # again; the database lease then decides whether it may be reclaimed.
             "enable.auto.commit": False,
             "enable.auto.offset.store": False,
+            # Audio separation can take much longer than Kafka's usual request
+            # processing. This allows one hour before Kafka considers a worker
+            # unresponsive and moves its partitions to another worker.
             "max.poll.interval.ms": 60 * 60 * 1000,
         }
     )
@@ -70,6 +81,8 @@ def main() -> None:
             if not handle_job(job, is_shutdown_requested):
                 break
 
+            # A synchronous commit waits for Kafka to confirm the saved offset.
+            # The next message is not accepted as finished until that succeeds.
             consumer.commit(message=message, asynchronous=False)
             print(f"Committed Kafka offset for job {job['jobId']}")
     finally:

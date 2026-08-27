@@ -5,6 +5,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# ffmpeg reads and writes audio formats. The compiler and Rust packages build
+# Python dependencies that do not publish a ready-made ARM64 Linux wheel.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     ffmpeg \

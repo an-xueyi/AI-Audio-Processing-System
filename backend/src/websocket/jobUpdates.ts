@@ -21,6 +21,12 @@ type JobUpdatesService = {
 export function createJobUpdatesService(
   httpServer: Server,
 ): JobUpdatesService {
+  /*
+   * A WebSocket starts as an HTTP upgrade request. Attaching WebSocketServer to
+   * the existing HTTP server lets Express routes and /ws/jobs share port 4000.
+   * Under Nginx, each upgraded connection remains attached to the backend
+   * replica Nginx selected until the socket closes or reconnects.
+   */
   const webSocketServer = new WebSocketServer({
     server: httpServer,
     path: "/ws/jobs",
@@ -87,6 +93,12 @@ export function createJobUpdatesService(
     });
   });
 
+  /*
+   * A cable can disappear without sending a WebSocket close frame. Every cycle
+   * the server expects a pong reply to its ping. A client that failed to answer
+   * the previous cycle is terminated so dead connections do not remain in
+   * memory forever. The ws client implementation replies to ping automatically.
+   */
   const heartbeatId = setInterval(() => {
     for (const webSocket of webSocketServer.clients) {
       const socket = webSocket as JobSocket;

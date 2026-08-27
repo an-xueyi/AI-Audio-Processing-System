@@ -38,6 +38,13 @@ def claim_job(
     worker_id: str,
     lease_timeout_seconds: int,
 ) -> tuple[bool, str | None]:
+    """
+    Atomically claim a new job or recover one whose worker lease has expired.
+
+    The conditions are part of the UPDATE itself, so PostgreSQL decides which
+    competing worker succeeds. Checking with SELECT and updating later would
+    leave a race where two workers could both see an available job.
+    """
     with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -137,6 +144,14 @@ def update_job_status(
     result_keys: dict | None = None,
     error_message: str | None = None,
 ) -> None:
+    """
+    Update progress only when this worker still owns the job.
+
+    The worker ID in the WHERE clause prevents a worker with an expired lease
+    from overwriting work performed by the replacement worker. The status event
+    is inserted through the same database transaction and later reaches each
+    backend replica through the transactional outbox publisher.
+    """
     serialized_result_keys = (
         json.dumps(result_keys) if result_keys is not None else None
     )

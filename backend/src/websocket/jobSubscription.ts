@@ -63,8 +63,12 @@ export async function refreshSubscription(
     return;
   }
 
-  // Kafka events can arrive while a database read is still active. Remember
-  // that event and perform one more read instead of running overlapping queries.
+  /*
+   * Kafka events can arrive while a database read is still active. Starting an
+   * overlapping query could let an older result be sent after a newer result.
+   * Instead, refreshRequested remembers that another event arrived, and the
+   * do/while loop performs exactly one additional read after the current read.
+   */
   if (subscription.isRefreshing) {
     subscription.refreshRequested = true;
     return;
@@ -128,8 +132,12 @@ async function subscribeToJob(socket: JobSocket, jobId: string) {
   sendJobUpdate(socket, subscription, job);
 
   if (!terminalStatuses.has(job.status)) {
-    // Kafka drives normal updates. This slow refresh repairs state if an event
-    // was missed during a broker or backend restart.
+    /*
+     * Kafka drives normal realtime updates. This slower database refresh is a
+     * recovery mechanism: if Kafka or a backend replica restarts at an unlucky
+     * moment, the browser eventually receives the current database state even
+     * when one notification event was missed.
+     */
     subscription.safetyIntervalId = setInterval(() => {
       void refreshSubscription(socket, subscription);
     }, safetyRefreshIntervalMs);

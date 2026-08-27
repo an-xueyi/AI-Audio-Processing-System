@@ -24,6 +24,14 @@ def wait_for_job_claim(
     job_id: str,
     shutdown_requested: Callable[[], bool],
 ) -> tuple[bool, str | None]:
+    """
+    Try to obtain database ownership of a job before running expensive work.
+
+    Kafka usually sends a message to one worker, but it may redeliver after a
+    crash or an uncertain offset commit. The database claim is the final guard
+    against two workers running Demucs for the same job at the same time. A live
+    owner is respected; a stale owner can be replaced after its lease expires.
+    """
     while not shutdown_requested():
         job_was_claimed, current_status = claim_job(
             job_id,
@@ -137,8 +145,9 @@ def handle_job(
     job_workspace = WORK_DIR / job_id
 
     try:
-        # The heartbeat keeps ownership alive while Demucs runs longer than the
-        # Kafka polling interval. Another worker may reclaim only an expired lease.
+        # JobLeaseHeartbeat updates processing_heartbeat_at in a background
+        # thread while Demucs runs. If this worker dies, updates stop; after the
+        # configured lease timeout another worker is allowed to reclaim the job.
         with JobLeaseHeartbeat(job_id, WORKER_ID):
             _run_attempts(job)
     except JobCancelled:

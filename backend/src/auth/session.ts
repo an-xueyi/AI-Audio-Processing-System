@@ -14,6 +14,14 @@ if (!configuredSessionSecret || configuredSessionSecret.length < 32) {
 
 const sessionSecret: string = configuredSessionSecret;
 
+/*
+ * This application uses a signed, stateless session instead of storing browser
+ * sessions in one backend container's memory. The cookie contains a random ID
+ * plus a signature created with SESSION_SECRET. Any backend replica that knows
+ * the same secret can verify the cookie, so a request may move between replicas
+ * without signing the user out. The signature proves that the ID was created by
+ * this application; it does not encrypt the ID or place private data in it.
+ */
 function createSignature(sessionId: string): string {
   return createHmac("sha256", sessionSecret)
     .update(sessionId)
@@ -37,6 +45,9 @@ function decodeSession(value: string): string | null {
   const suppliedBuffer = Buffer.from(suppliedSignature);
   const expectedBuffer = Buffer.from(expectedSignature);
 
+  // timingSafeEqual performs the comparison in a way that does not reveal how
+  // many characters matched through tiny timing differences. Equal lengths are
+  // required by the Node.js API, so length is checked before calling it.
   if (
     suppliedBuffer.length !== expectedBuffer.length ||
     !timingSafeEqual(suppliedBuffer, expectedBuffer)
@@ -66,6 +77,8 @@ export function establishSession(req: Request, res: Response) {
     stringifySetCookie({
       name: sessionCookieName,
       value: encodeSession(sessionId),
+      // JavaScript running in the browser cannot read an HttpOnly cookie. The
+      // browser still sends it automatically with API and WebSocket requests.
       httpOnly: true,
       maxAge: sessionMaxAgeSeconds,
       path: "/",
