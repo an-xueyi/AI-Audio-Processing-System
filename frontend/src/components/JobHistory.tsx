@@ -1,5 +1,6 @@
 /* Render recent session-owned jobs and let the user reopen one job's details. */
 import type { Job } from "../types";
+import { haveJobResultsExpired } from "../utils/jobs";
 
 // Intl uses the browser's locale and time zone, so history dates are readable to
 // the current user without manually formatting year/month/day strings.
@@ -44,6 +45,10 @@ export function JobHistory({
           {jobs.map((historyJob) => {
             // Comparing UUIDs is enough to identify the row currently shown below.
             const isSelected = historyJob.id === selectedJobId;
+            const resultsHaveExpired = haveJobResultsExpired(historyJob);
+            const displayedStatus = resultsHaveExpired
+              ? "EXPIRED"
+              : historyJob.status;
 
             return (
               <li key={historyJob.id}>
@@ -67,7 +72,15 @@ export function JobHistory({
                   </span>
 
                   <span className="job-history-progress">
-                    <span className="status-pill">{historyJob.status}</span>
+                    <span
+                      className={
+                        resultsHaveExpired
+                          ? "status-pill expired"
+                          : "status-pill"
+                      }
+                    >
+                      {displayedStatus}
+                    </span>
                     <span>{historyJob.progress}%</span>
                   </span>
                 </button>

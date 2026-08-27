@@ -131,6 +131,20 @@ router.get("/:id/downloads", async (req, res) => {
     });
   }
 
+  // Expiration is enforced when its time arrives, even if the asynchronous
+  // cleanup service has not physically removed the MinIO objects yet.
+  const storageHasExpired =
+    job.storage_deleted_at !== null ||
+    (job.storage_expires_at !== null && job.storage_expires_at <= new Date());
+
+  if (storageHasExpired) {
+    // 410 Gone means the resource existed previously but is intentionally no
+    // longer available. This is more precise than 404 for retained job history.
+    return res.status(410).json({
+      error: "These audio results have expired and are no longer available",
+    });
+  }
+
   if (!job.result_object_keys) {
     // This guards inconsistent data: completion should normally include keys.
     return res.status(409).json({

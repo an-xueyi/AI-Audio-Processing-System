@@ -5,7 +5,7 @@ import json
 import psycopg
 
 from cancellation import JobCancelled
-from config import DATABASE_URL, JOB_STATUS_TOPIC
+from config import DATABASE_URL, JOB_STATUS_TOPIC, RESULT_RETENTION_HOURS
 
 
 def require_database_url() -> str:
@@ -200,6 +200,13 @@ def update_job_status(
                     progress = %s,
                     result_object_keys = COALESCE(%s::jsonb, result_object_keys),
                     error_message = %s,
+                    storage_expires_at = CASE
+                      WHEN %s IN ('COMPLETED', 'FAILED') THEN COALESCE(
+                        storage_expires_at,
+                        NOW() + (%s * INTERVAL '1 hour')
+                      )
+                      ELSE storage_expires_at
+                    END,
                     processing_worker_id = CASE
                       WHEN %s IN ('COMPLETED', 'FAILED') THEN NULL
                       ELSE processing_worker_id
@@ -217,6 +224,8 @@ def update_job_status(
                     progress,
                     serialized_result_keys,
                     error_message,
+                    status,
+                    RESULT_RETENTION_HOURS,
                     status,
                     status,
                     job_id,

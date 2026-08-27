@@ -32,6 +32,10 @@ export type Job = {
   progress: number;
   result_object_keys: Record<string, string> | null;
   error_message: string | null;
+  // A terminal job retains private audio until this server-generated time.
+  storage_expires_at: string | null;
+  // A non-null deletion time confirms that background cleanup removed the files.
+  storage_deleted_at: string | null;
   // PostgreSQL timestamps arrive in browser JSON as ISO-formatted strings.
   created_at: string;
   updated_at: string;

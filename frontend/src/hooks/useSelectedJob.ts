@@ -6,7 +6,7 @@
 import { useCallback, useRef, useState } from "react";
 import { fetchDownloadUrls } from "../api/audioProcessing";
 import type { Job } from "../types";
-import { isActiveJob } from "../utils/jobs";
+import { haveJobResultsExpired, isActiveJob } from "../utils/jobs";
 import { useJobWebSocket } from "./useJobWebSocket";
 
 type SelectedJobOptions = {
@@ -45,6 +45,16 @@ export function useSelectedJob({
       setJob(updatedJob);
 
       if (updatedJob.status === "COMPLETED") {
+        if (haveJobResultsExpired(updatedJob)) {
+          // Do not request a URL that the backend is required to reject. Keeping
+          // downloadUrls null also removes any links belonging to an older job.
+          setDownloadUrls(null);
+          onStatusMessage(
+            "These audio results have expired and are no longer available.",
+          );
+          return;
+        }
+
         try {
           // Always request fresh links because any links from an earlier visit may
           // have passed their five-minute expiration time.

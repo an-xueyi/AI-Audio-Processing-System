@@ -3,6 +3,9 @@ services:
   # host-facing "ports" entry. Docker Compose can therefore create several
   # replicas, and all browser traffic must enter through the Nginx service.
   backend:
+    # The cleanup service reuses this compiled application image with a different
+    # command, avoiding a second copy of the Node dependencies and source build.
+    image: ai-audio-processing-backend:local
     build:
       context: ./backend
     environment:
@@ -23,6 +26,8 @@ services:
       CORS_ALLOWED_ORIGINS: http://localhost:5173
       COOKIE_SECURE: "false"
       MAX_UPLOAD_BYTES: 262144000
+      # The API uses this when a user cancels a job.
+      RESULT_RETENTION_HOURS: ${RESULT_RETENTION_HOURS:-168}
     expose:
       # "expose" documents the private container port. It does not publish the
       # port to the Mac; Nginx reaches it through the Compose network.
@@ -42,9 +47,34 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
       kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Storage cleanup is intentionally separate from the horizontally scaled API.
+  # Its database claims make running more than one copy safe, but one local copy
+  # is sufficient for this project.
+  cleanup:
+    image: ai-audio-processing-backend:local
+    command: npm run cleanup
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?required}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?required}
+      S3_BUCKET: audio-processing
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
+      CLEANUP_BATCH_SIZE: ${CLEANUP_BATCH_SIZE:-25}
+      CLEANUP_CLAIM_TIMEOUT_MINUTES: ${CLEANUP_CLAIM_TIMEOUT_MINUTES:-15}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     restart: unless-stopped
 
@@ -100,17 +130,48 @@ services:
       S3_BUCKET: audio-processing
       PROCESSING_MODE: demucs
       DEMUCS_MODEL: htdemucs_6s
+      RESULT_RETENTION_HOURS: ${RESULT_RETENTION_HOURS:-168}
     volumes:
       - demucs_model_cache:/root/.cache/torch
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 1h
+
+  # Run every numbered SQL migration before application services start. Each
+  # migration is idempotent, so restarting Compose safely checks them again.
+  migrate:
+    image: postgres:16
+    volumes:
+      - ./backend/sql:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        for migration in /migrations/*.sql; do
+          echo "Applying $${migration}"
+          psql \
+            --host postgres \
+            --username "$${POSTGRES_USER}" \
+            --dbname "$${POSTGRES_DB}" \
+            --set ON_ERROR_STOP=1 \
+            --file "$${migration}"
+        done
+        echo 'Database migrations are complete.'
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
 
   postgres:
     image: postgres:16

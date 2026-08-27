@@ -97,6 +97,12 @@ h2 {
   color: #991b1b;
 }
 
+/* Expired is a storage state, so neutral gray distinguishes it from failure. */
+.status-pill.expired {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 .file-input {
   display: block;
   width: 100%;

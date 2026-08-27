@@ -1,5 +1,6 @@
 /* Keep PostgreSQL job operations and their transaction rules in one module. */
 import { pool } from "../db.js";
+import { resultRetentionHours } from "../config/retention.js";
 import { jobCreatedTopic, jobStatusTopic } from "../kafka/topics.js";
 
 // JobRecord describes one row returned from the jobs table. Snake_case names
@@ -12,13 +13,16 @@ export type JobRecord = {
   progress: number;
   result_object_keys: Record<string, string> | null;
   error_message: string | null;
+  storage_expires_at: Date | null;
+  storage_deleted_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
 
 // Reusing this list keeps SELECT and RETURNING results consistent across methods.
 const jobColumns = `id, original_file_name, input_object_key, status, progress,
-  result_object_keys, error_message, created_at, updated_at`;
+  result_object_keys, error_message, storage_expires_at, storage_deleted_at,
+  created_at, updated_at`;
 
 // Limit one history response so a long-lived browser session cannot make the API
 // load and serialize an unlimited number of old jobs in a single request.
@@ -113,12 +117,18 @@ export async function cancelJob(
            processing_worker_id = NULL,
            processing_heartbeat_at = NULL,
            error_message = NULL,
+           storage_expires_at = COALESCE(
+             storage_expires_at,
+             NOW() + ($3 * INTERVAL '1 hour')
+           ),
            updated_at = NOW()
        WHERE id = $1
          AND owner_id = $2
          AND status IN ('PENDING', 'PROCESSING', 'RETRYING')
        RETURNING ${jobColumns}`,
-      [jobId, ownerId],
+      // A cancelled job no longer needs its uploaded source forever. The same
+      // configured retention period used for completed results applies here.
+      [jobId, ownerId, resultRetentionHours],
     );
     // No returned row means the job was absent, belonged to someone else, or had
     // already reached a status that cannot be cancelled.

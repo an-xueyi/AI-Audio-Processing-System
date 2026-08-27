@@ -10,7 +10,7 @@ A distributed web application that separates an uploaded song into six audio ste
 4. Cancel an active job when processing is no longer needed.
 5. Download the completed vocals, drums, bass, guitar, piano, and other stems.
 
-Download URLs are temporary. Uploaded files and processing jobs are isolated by a signed browser session.
+Download URLs are temporary. Uploaded files and processing jobs are isolated by a signed browser session. Private uploads and generated stems expire automatically after the configured retention period, while the job remains visible in history.
 
 ## Architecture
 
@@ -49,6 +49,7 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 - Audio type, extension, ownership, and size validation
 - Session-based job isolation and temporary result download URLs
 - Session-owned job history with active-job recovery after a page refresh
+- Automatic expiration and deletion of private source audio and generated stems
 - PostgreSQL transactional outbox for reliable Kafka publishing
 - Nginx load balancing across horizontally scalable backend replicas
 - Horizontally scalable Kafka consumer workers
@@ -59,6 +60,7 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 - WebSocket reconnection with polling fallback
 - Retry backoff and dead-letter events for failed jobs
 - Docker health checks, persistent volumes, and graceful shutdown
+- Ordered database migrations and an independently running storage-cleanup service
 
 ## Technology
 
@@ -79,6 +81,7 @@ backend/
   sql/                 PostgreSQL schema migrations
   src/routes/          HTTP request validation and responses
   src/services/        Job transactions and object-storage operations
+  src/cleanup.ts       Expired object cleanup process and graceful shutdown
   src/kafka/           Producers, consumers, topics, and outbox publishing
   src/websocket/       Connections, subscriptions, and job notifications
 

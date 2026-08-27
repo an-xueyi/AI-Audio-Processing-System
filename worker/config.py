@@ -39,6 +39,14 @@ WORK_DIR = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
 PROCESSING_MODE = os.getenv("PROCESSING_MODE", "mock")
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_6s")
 
+# Terminal jobs retain their private upload and result objects for this many
+# hours. The cleanup service reads the resulting database timestamp later, so
+# worker and cleanup containers do not need synchronized clocks or timers.
+RESULT_RETENTION_HOURS = int(os.getenv("RESULT_RETENTION_HOURS", "168"))
+
+if RESULT_RETENTION_HOURS <= 0:
+    raise RuntimeError("RESULT_RETENTION_HOURS must be a positive integer")
+
 # Multiline calls keep longer environment names readable.
 DEAD_LETTER_TOPIC = os.getenv(
     "KAFKA_DEAD_LETTER_TOPIC",
