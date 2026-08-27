@@ -1,3 +1,4 @@
+/* Own the WebSocket server, connection authentication, and job broadcasts. */
 import type { Server } from "http";
 import { WebSocketServer } from "ws";
 import { readSessionId } from "../auth/session.js";
@@ -10,8 +11,12 @@ import {
   sendJson,
 } from "./jobSubscription.js";
 
+// Ping each browser every 30 seconds to detect connections that vanished without
+// completing the normal WebSocket close handshake.
 const heartbeatIntervalMs = 30_000;
 
+// This public interface lets server.ts use WebSockets without knowing internal
+// socket storage and subscription details.
 type JobUpdatesService = {
   closeClients: () => void;
   closeServer: () => Promise<void>;
@@ -30,22 +35,32 @@ export function createJobUpdatesService(
   const webSocketServer = new WebSocketServer({
     server: httpServer,
     path: "/ws/jobs",
+    // Browser commands contain only a type and job UUID. Reject messages larger
+    // than 16 KiB so this channel cannot be used for large data transfer.
     maxPayload: 16 * 1024,
+    // Small JSON messages do not justify compression cost and complexity.
     perMessageDeflate: false,
   });
 
+  // This callback runs after an HTTP request successfully upgrades to WebSocket.
   webSocketServer.on("connection", (webSocket, request) => {
+    // Type assertion allows application-specific fields declared on JobSocket.
     const socket = webSocket as JobSocket;
 
+    // WebSockets are not protected by normal browser CORS enforcement, so origin
+    // validation is repeated explicitly during the handshake connection event.
     if (!isAllowedOrigin(request.headers.origin)) {
       sendJson(socket, {
         type: "error",
         error: "WebSocket origin is not allowed",
       });
+      // 1008 is the standard close code for a policy violation.
       socket.close(1008, "Origin not allowed");
       return;
     }
 
+    // The upgrade request includes normal HTTP cookies. Verify the same signed
+    // session used by protected Express routes.
     const sessionId = readSessionId(request.headers.cookie);
 
     if (!sessionId) {
@@ -57,14 +72,18 @@ export function createJobUpdatesService(
       return;
     }
 
+    // Initialize all application fields before registering event handlers.
     socket.isAlive = true;
     socket.sessionId = sessionId;
     socket.subscriptionVersion = 0;
 
+    // The ws client automatically replies to a ping with pong. Receiving it proves
+    // the connection is still able to communicate in both directions.
     socket.on("pong", () => {
       socket.isAlive = true;
     });
 
+    // `data` contains the message bytes and isBinary states how they were sent.
     socket.on("message", (data, isBinary) => {
       if (isBinary) {
         sendJson(socket, {
@@ -74,6 +93,8 @@ export function createJobUpdatesService(
         return;
       }
 
+      // Convert text bytes to a string and start async validation/handling. Attach
+      // catch here because an event callback cannot return an awaited Promise.
       void handleClientMessage(socket, data.toString()).catch((error) => {
         console.error("WebSocket message handling failed:", error);
         sendJson(socket, {
@@ -83,10 +104,13 @@ export function createJobUpdatesService(
       });
     });
 
+    // Closing a connection must stop its safety interval and remove subscription state.
     socket.on("close", () => {
       clearSubscription(socket);
     });
 
+    // Tell the browser it may now send its subscribe command. Converting the
+    // interval to seconds gives a friendlier protocol value.
     sendJson(socket, {
       type: "connection_ready",
       heartbeatIntervalSeconds: heartbeatIntervalMs / 1000,
@@ -100,15 +124,20 @@ export function createJobUpdatesService(
    * memory forever. The ws client implementation replies to ping automatically.
    */
   const heartbeatId = setInterval(() => {
+    // webSocketServer.clients is the current Set of connections on this replica.
     for (const webSocket of webSocketServer.clients) {
       const socket = webSocket as JobSocket;
 
+      // isAlive remains false when the previous ping received no pong response.
       if (!socket.isAlive) {
         clearSubscription(socket);
+        // terminate closes immediately without waiting for another handshake from
+        // a peer that is assumed unreachable.
         socket.terminate();
         continue;
       }
 
+      // Assume failure before pinging. The pong handler changes this back to true.
       socket.isAlive = false;
       socket.ping();
     }
@@ -116,30 +145,38 @@ export function createJobUpdatesService(
 
   return {
     closeClients() {
+      // Ask every connected browser to close normally during backend shutdown.
       for (const webSocket of webSocketServer.clients) {
         const socket = webSocket as JobSocket;
         clearSubscription(socket);
+        // 1001 means the endpoint is going away, prompting clients to reconnect.
         socket.close(1001, "Server shutting down");
       }
     },
     closeServer() {
+      // Stop creating ping cycles before waiting for the server to close.
       clearInterval(heartbeatId);
 
+      // ws exposes callback-based close completion; wrap it so server.ts can await it.
       return new Promise<void>((resolve) => {
         webSocketServer.close(() => resolve());
       });
     },
     async notifyJobChanged(jobId: string) {
+      // Collect refresh Promises so the Kafka message is not considered handled
+      // until every matching local client has read current database state.
       const refreshes: Promise<void>[] = [];
 
       for (const webSocket of webSocketServer.clients) {
         const socket = webSocket as JobSocket;
 
+        // Optional chaining handles sockets that have not subscribed to a job.
         if (socket.subscription?.jobId === jobId) {
           refreshes.push(refreshSubscription(socket, socket.subscription));
         }
       }
 
+      // An empty array resolves immediately; otherwise refresh all matches concurrently.
       await Promise.all(refreshes);
     },
   };

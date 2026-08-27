@@ -1,3 +1,4 @@
+/* Reject state-changing API requests sent from an unapproved browser origin. */
 import type { NextFunction, Request, Response } from "express";
 import { isAllowedOrigin } from "../config/security.js";
 
@@ -12,6 +13,7 @@ export function requireAllowedOrigin(
     });
   }
 
+  // Calling next hands the same request to the next middleware or route. A
+  // middleware that sends a response above deliberately does not call next.
   next();
 }
-

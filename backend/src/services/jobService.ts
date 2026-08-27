@@ -1,6 +1,9 @@
+/* Keep PostgreSQL job operations and their transaction rules in one module. */
 import { pool } from "../db.js";
 import { jobCreatedTopic, jobStatusTopic } from "../kafka/topics.js";
 
+// JobRecord describes one row returned from the jobs table. Snake_case names
+// intentionally match PostgreSQL column names exactly.
 export type JobRecord = {
   id: string;
   original_file_name: string;
@@ -13,6 +16,7 @@ export type JobRecord = {
   updated_at: Date;
 };
 
+// Reusing this list keeps SELECT and RETURNING results consistent across methods.
 const jobColumns = `id, original_file_name, input_object_key, status, progress,
   result_object_keys, error_message, created_at, updated_at`;
 
@@ -21,10 +25,15 @@ export async function createJob(
   originalFileName: string,
   inputObjectKey: string,
 ): Promise<JobRecord> {
+  // Reserve one connection from the shared pool for this complete transaction.
   const client = await pool.connect();
 
   try {
+    // BEGIN groups later statements into one all-or-nothing database transaction.
     await client.query("BEGIN");
+
+    // $1, $2, and $3 are PostgreSQL placeholders. The separate values array lets
+    // pg escape user data safely instead of inserting it into SQL source text.
     const result = await client.query<JobRecord>(
       `INSERT INTO jobs
        (owner_id, original_file_name, input_object_key, status, progress)
@@ -32,6 +41,7 @@ export async function createJob(
        RETURNING ${jobColumns}`,
       [ownerId, originalFileName, inputObjectKey],
     );
+    // RETURNING places the inserted row in rows; this INSERT should return one.
     const job = result.rows[0];
 
     if (!job) {
@@ -60,16 +70,23 @@ export async function createJob(
       ],
     );
 
+    // COMMIT makes both the job and outbox event durable and visible together.
     await client.query("COMMIT");
     return job;
   } catch (error) {
+    // Any error cancels every uncommitted statement from this transaction.
     await client.query("ROLLBACK");
+
+    // Re-throw so the Express error handler can log and report the failure.
     throw error;
   } finally {
+    // finally always runs. release returns this connection to the pool for reuse.
     client.release();
   }
 }
 
+// A discriminated union lists every expected cancellation outcome. Callers check
+// `outcome` and TypeScript then knows which additional fields are available.
 export type CancelJobResult =
   | { outcome: "cancelled"; job: JobRecord }
   | { outcome: "not_found" }
@@ -83,6 +100,9 @@ export async function cancelJob(
 
   try {
     await client.query("BEGIN");
+
+    // The WHERE clause combines identity, ownership, and current-state checks in
+    // the UPDATE itself. This prevents a race between checking and cancelling.
     const result = await client.query<JobRecord>(
       `UPDATE jobs
        SET status = 'CANCELLED',
@@ -96,21 +116,31 @@ export async function cancelJob(
        RETURNING ${jobColumns}`,
       [jobId, ownerId],
     );
+    // No returned row means the job was absent, belonged to someone else, or had
+    // already reached a status that cannot be cancelled.
     const job = result.rows[0];
 
     if (!job) {
+      // Nothing changed, so this transaction has no useful work to commit.
       await client.query("ROLLBACK");
+
+      // A second ownership-filtered query distinguishes "not found" from a job
+      // that exists but is already terminal.
       const existingJob = await client.query<{ status: string }>(
         "SELECT status FROM jobs WHERE id = $1 AND owner_id = $2",
         [jobId, ownerId],
       );
+      // Optional chaining returns undefined when the query returned no row.
       const existingStatus = existingJob.rows[0]?.status;
 
+      // This ternary creates the matching result shape for the route handler.
       return existingStatus
         ? { outcome: "not_cancellable", status: existingStatus }
         : { outcome: "not_found" };
     }
 
+    // Enqueue a status notification in the same cancellation transaction so
+    // every backend replica can refresh its connected browser clients.
     await client.query(
       `INSERT INTO outbox_events (topic, event_key, payload)
        VALUES ($1, $2, jsonb_build_object('jobId', $2::text))`,
@@ -131,6 +161,8 @@ export async function findOwnedJob(
   jobId: string,
   ownerId: string,
 ): Promise<JobRecord | null> {
+  // owner_id is part of the query rather than checked afterward, so another
+  // session's job row is never returned to application code.
   const result = await pool.query<JobRecord>(
     `SELECT ${jobColumns}
      FROM jobs
@@ -138,5 +170,7 @@ export async function findOwnedJob(
     [jobId, ownerId],
   );
 
+  // Nullish coalescing changes an absent first row (undefined) into the explicit
+  // null promised by this function's return type.
   return result.rows[0] ?? null;
 }

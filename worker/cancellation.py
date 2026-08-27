@@ -1,2 +1,5 @@
+"""Define the application-specific exception used to stop cancelled work."""
+
+
 class JobCancelled(Exception):
-    """Raised when a user cancels a job that a worker is processing."""
+    """Raised for expected user cancellation, not an infrastructure failure."""

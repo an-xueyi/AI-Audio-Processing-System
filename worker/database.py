@@ -1,3 +1,5 @@
+"""Perform worker-owned PostgreSQL operations and enqueue status events."""
+
 import json
 
 import psycopg
@@ -7,28 +9,43 @@ from config import DATABASE_URL, JOB_STATUS_TOPIC
 
 
 def require_database_url() -> str:
+    """Return configured connection text or fail before attempting PostgreSQL."""
     if DATABASE_URL is None:
         raise RuntimeError("DATABASE_URL is missing")
 
+    # This return also narrows the type from str | None to str for type checkers.
     return DATABASE_URL
 
 
 def is_job_cancelled(job_id: str) -> bool:
+    """Read the latest durable cancellation state for a processing checkpoint."""
+    # The connection context manager commits on normal exit, rolls back on error,
+    # and closes the network connection in both cases.
     with psycopg.connect(require_database_url()) as connection:
+        # A cursor sends SQL and reads result rows through this connection.
         with connection.cursor() as cursor:
             cursor.execute("SELECT status FROM jobs WHERE id = %s", (job_id,))
+            # fetchone returns one tuple or None when no matching job exists.
             job = cursor.fetchone()
 
+    # Short-circuit `and` avoids reading job[0] when job is None.
     return job is not None and job[0] == "CANCELLED"
 
 
 def enqueue_job_status_event(cursor, job_id: str) -> None:
-    """Add a status event to the caller's existing database transaction."""
+    """
+    Add a status event using the caller's existing database transaction.
+
+    Reusing the cursor is essential: the job update and notification either both
+    commit or both roll back, so clients are never notified about unsaved state.
+    """
     cursor.execute(
         """
         INSERT INTO outbox_events (topic, event_key, payload)
         VALUES (%s, %s, jsonb_build_object('jobId', %s::text))
         """,
+        # psycopg safely replaces %s placeholders with these values. Values are
+        # not inserted into SQL text, which prevents SQL-injection quoting bugs.
         (JOB_STATUS_TOPIC, job_id, job_id),
     )
 
@@ -47,6 +64,8 @@ def claim_job(
     """
     with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
+            # This single UPDATE handles both first-time claims and recovery of a
+            # stale lease. PostgreSQL locks the row while evaluating/updating it.
             cursor.execute(
                 """
                 UPDATE jobs
@@ -71,24 +90,31 @@ def claim_job(
                   )
                 RETURNING status
                 """,
+                # Values correspond in order to the three %s placeholders.
                 (worker_id, job_id, lease_timeout_seconds),
             )
+            # RETURNING produces one row only when this UPDATE won the claim.
             claimed_job = cursor.fetchone()
 
             if claimed_job is not None:
+                # Use the same cursor so the status event and claim share a commit.
                 enqueue_job_status_event(cursor, job_id)
                 return True, claimed_job[0]
 
+            # The atomic update did not win. Read current status so the caller can
+            # distinguish missing, terminal, and temporarily owned jobs.
             cursor.execute(
                 "SELECT status FROM jobs WHERE id = %s",
                 (job_id,),
             )
             existing_job = cursor.fetchone()
 
+    # The conditional expression returns status when a row exists and None otherwise.
     return False, existing_job[0] if existing_job else None
 
 
 def begin_job_attempt(job_id: str, worker_id: str) -> int:
+    """Increment durable attempt count after confirming current lease ownership."""
     with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -110,15 +136,19 @@ def begin_job_attempt(job_id: str, worker_id: str) -> int:
             result = cursor.fetchone()
 
             if result is not None:
+                # Notify browser clients about PROCESSING and reset progress.
                 enqueue_job_status_event(cursor, job_id)
 
+    # No returned row means cancellation, terminal state, or changed worker owner.
     if result is None:
         raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")
 
+    # RETURNING processing_attempts provides the newly incremented integer.
     return result[0]
 
 
 def refresh_job_lease(job_id: str, worker_id: str) -> bool:
+    """Advance heartbeat time only while this worker still owns active work."""
     with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -131,6 +161,7 @@ def refresh_job_lease(job_id: str, worker_id: str) -> bool:
                 """,
                 (job_id, worker_id),
             )
+            # rowcount 1 means one owned job matched; 0 means ownership was lost.
             lease_was_refreshed = cursor.rowcount == 1
 
     return lease_was_refreshed
@@ -152,12 +183,16 @@ def update_job_status(
     is inserted through the same database transaction and later reaches each
     backend replica through the transactional outbox publisher.
     """
+    # PostgreSQL expects JSON text for the explicit ::jsonb cast. Preserve None
+    # when this progress update has no result map to replace.
     serialized_result_keys = (
         json.dumps(result_keys) if result_keys is not None else None
     )
 
     with psycopg.connect(require_database_url()) as connection:
         with connection.cursor() as cursor:
+            # COALESCE keeps existing result keys when serialized_result_keys is
+            # null. CASE releases ownership only for completed or failed jobs.
             cursor.execute(
                 """
                 UPDATE jobs
@@ -188,13 +223,17 @@ def update_job_status(
                     worker_id,
                 ),
             )
+            # The WHERE owner check makes rowcount the authoritative ownership result.
             job_was_updated = cursor.rowcount == 1
 
             if job_was_updated:
                 enqueue_job_status_event(cursor, job_id)
 
+    # Translate a failed owned update into the more specific cancellation signal
+    # when the latest database status proves the user cancelled.
     if not job_was_updated and is_job_cancelled(job_id):
         raise JobCancelled(f"Job {job_id} was cancelled")
 
+    # Other zero-row cases indicate a stale or replaced worker lease.
     if not job_was_updated:
         raise RuntimeError(f"Worker {worker_id} no longer owns job {job_id}")

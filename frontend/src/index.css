@@ -1,3 +1,4 @@
+/* Global defaults establish typography, text color, and page background. */
 :root {
   font-family:
     Inter,
@@ -20,6 +21,7 @@ input {
 }
 
 .app-shell {
+  /* Keep content readable on wide screens while retaining 16px side margins. */
   width: min(960px, calc(100% - 32px));
   margin: 0 auto;
   padding: 48px 0;
@@ -53,6 +55,7 @@ h1 {
 }
 
 .panel {
+  /* Repeated application sections share one restrained visual container. */
   margin-top: 18px;
   padding: 24px;
   border: 1px solid #dbe3ef;
@@ -177,6 +180,7 @@ h2 {
 }
 
 @media (max-width: 640px) {
+  /* On narrow screens, reduce spacing and stack headers to prevent clipping. */
   .app-shell {
     width: min(100% - 24px, 960px);
     padding: 28px 0;

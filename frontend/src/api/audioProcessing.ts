@@ -1,3 +1,8 @@
+/*
+ * All browser network requests live in this module. UI code calls named
+ * functions such as createProcessingJob instead of repeating URLs, HTTP
+ * methods, cookie options, JSON parsing, and error handling in components.
+ */
 import { API_BASE_URL } from "../config";
 import type {
   ApiErrorResponse,
@@ -9,31 +14,43 @@ import type {
 
 async function getApiErrorMessage(response: Response, fallback: string) {
   try {
+    // Error responses are expected to contain { error: "..." }. Parsing can
+    // itself fail for an empty or non-JSON response, so a readable fallback is
+    // always returned from the catch branch.
     const data = (await response.json()) as ApiErrorResponse;
+    // Logical OR chooses the server's non-empty message or the supplied default.
     return data.error || fallback;
   } catch {
+    // Parsing failure should not hide the original API operation's useful fallback.
     return fallback;
   }
 }
 
 export async function createBrowserSession(): Promise<void> {
+  // POST asks the backend to create a new session or refresh an existing cookie.
   const response = await fetch(`${API_BASE_URL}/api/session`, {
     method: "POST",
+    // The frontend and backend use different local ports, which are different
+    // origins. `include` allows the browser to receive and send the session cookie.
     credentials: "include",
   });
 
+  // ok is true for HTTP status 200-299. Other statuses become JavaScript errors
+  // so the hook can present one consistent failure path.
   if (!response.ok) {
     throw new Error("Could not create a secure browser session");
   }
 }
 
 export async function fetchBackendHealth(): Promise<HealthResponse> {
+  // A GET request is fetch's default, so no method option is required here.
   const response = await fetch(`${API_BASE_URL}/health`);
 
   if (!response.ok) {
     throw new Error("Backend health check failed");
   }
 
+  // Wait for the response body to be parsed, then describe its expected type.
   return (await response.json()) as HealthResponse;
 }
 
@@ -41,12 +58,15 @@ export async function requestPresignedUpload(
   file: File,
   contentType: string,
 ): Promise<PresignResponse> {
+  // This request sends metadata only; the File bytes are not included.
   const response = await fetch(`${API_BASE_URL}/api/uploads/presign`, {
     method: "POST",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
+    // fetch sends text over the network. JSON.stringify converts this object to
+    // the JSON text declared by the Content-Type header.
     body: JSON.stringify({
       fileName: file.name,
       contentType,
@@ -60,6 +80,7 @@ export async function requestPresignedUpload(
     );
   }
 
+  // The response contains temporary uploadUrl and permanent private objectKey.
   return (await response.json()) as PresignResponse;
 }
 
@@ -68,11 +89,15 @@ export async function uploadAudioFile(
   file: File,
   contentType: string,
 ): Promise<void> {
+  // uploadUrl points to MinIO/S3, not Express. The browser transfers the File
+  // directly, so the backend handles only small control messages.
   const response = await fetch(uploadUrl, {
     method: "PUT",
     headers: {
       "Content-Type": contentType,
     },
+    // File is a Blob, so fetch can stream its bytes as the request body without
+    // converting the audio to JSON or base64.
     body: file,
   });
 
@@ -85,6 +110,8 @@ export async function createProcessingJob(
   originalFileName: string,
   inputObjectKey: string,
 ): Promise<Job> {
+  // The new job references an object already present in storage. Express verifies
+  // that object before committing the database job and outbox event.
   const response = await fetch(`${API_BASE_URL}/api/jobs`, {
     method: "POST",
     credentials: "include",
@@ -105,6 +132,7 @@ export async function createProcessingJob(
 }
 
 export async function cancelProcessingJob(jobId: string): Promise<Job> {
+  // Put the job UUID in the route path and include the ownership session cookie.
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/cancel`, {
     method: "POST",
     credentials: "include",
@@ -120,6 +148,8 @@ export async function cancelProcessingJob(jobId: string): Promise<Job> {
 export async function fetchDownloadUrls(
   jobId: string,
 ): Promise<Record<string, string>> {
+  // Download links are requested only after completion because each link is
+  // short-lived and should be generated as late as possible.
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/downloads`, {
     credentials: "include",
   });
@@ -130,11 +160,15 @@ export async function fetchDownloadUrls(
     );
   }
 
+  // `as` tells TypeScript how this parsed JSON should be treated. It does not
+  // alter the response or perform runtime validation.
   const data = (await response.json()) as DownloadUrlsResponse;
   return data.downloadUrls;
 }
 
 export async function fetchJob(jobId: string): Promise<Job> {
+  // This ordinary HTTP endpoint is the fallback when realtime WebSocket delivery
+  // cannot be maintained.
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, {
     credentials: "include",
   });

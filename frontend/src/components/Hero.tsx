@@ -1,3 +1,4 @@
+/* Static heading that identifies the application and summarizes its workflow. */
 export function Hero() {
   return (
     <section className="hero-section">

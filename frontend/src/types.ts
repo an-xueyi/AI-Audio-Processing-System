@@ -1,3 +1,8 @@
+/*
+ * Shared descriptions of JSON exchanged with the backend. These TypeScript
+ * types help during development but do not validate network responses at
+ * runtime because all type information is removed from the browser bundle.
+ */
 export type HealthResponse = {
   status: string;
   service: string;
@@ -40,6 +45,8 @@ export type ApiErrorResponse = {
 };
 
 export type JobWebSocketMessage =
+  // This union lists every message shape the server may send. Checking `type`
+  // later narrows the value to the fields belonging to that specific message.
   | {
       type: "connection_ready";
       heartbeatIntervalSeconds: number;

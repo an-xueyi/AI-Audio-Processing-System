@@ -1,3 +1,5 @@
+"""Coordinate download, Demucs execution, progress, and result upload stages."""
+
 import shutil
 import time
 from pathlib import Path
@@ -10,11 +12,16 @@ from storage import download_input_file, upload_demucs_results, upload_mock_resu
 
 
 def create_job_workspace(job_id: str) -> Path:
+    """Create one clean temporary directory isolated by job UUID."""
     job_workspace = WORK_DIR / job_id
 
     if job_workspace.exists():
+        # Redelivery after a crash may leave partial files. Removing them prevents
+        # stale output from being mistaken for the new attempt's results.
         shutil.rmtree(job_workspace)
 
+    # parents=True creates missing parent folders; exist_ok avoids a race error
+    # when the directory already exists by the time mkdir runs.
     job_workspace.mkdir(parents=True, exist_ok=True)
     return job_workspace
 
@@ -25,14 +32,24 @@ def process_audio_job(
     job_workspace: Path,
     worker_id: str,
 ) -> dict:
+    """Run one job's stages and return {stem_name: object_storage_key}."""
+    # Progress ranges are reserved by stage: download uses 15-20, Demucs uses
+    # 25-92, and result uploads use 92-99. COMPLETED is set to 100 by the caller.
+    # Persist stage progress before and after each potentially slow external action.
     update_job_status(job_id, worker_id, "PROCESSING", 15)
+
+    # Cancellation checkpoints avoid beginning a new expensive stage unnecessarily.
     raise_if_job_cancelled(job_id)
+
+    # Download from the private object key supplied by the validated job event.
     input_path = download_input_file(input_object_key, job_workspace)
     print(f"Downloaded input file to {input_path}")
 
     update_job_status(job_id, worker_id, "PROCESSING", 20)
     raise_if_job_cancelled(job_id)
 
+    # Real mode runs machine-learning separation; any other configured value uses
+    # the lightweight infrastructure-testing path below.
     if PROCESSING_MODE == "demucs":
         separated_dir = run_demucs(
             job_id,
@@ -42,6 +59,8 @@ def process_audio_job(
         )
 
         def report_stem_upload(index: int, total: int) -> None:
+            # Convert "stem 3 of 6" into the small final portion of the progress
+            # range. round produces an integer suitable for the database column.
             raise_if_job_cancelled(job_id)
             upload_progress = 92 + round((index / total) * 7)
             update_job_status(
@@ -51,6 +70,7 @@ def process_audio_job(
                 upload_progress,
             )
 
+        # Return immediately with uploaded WAV keys when the real path succeeds.
         return upload_demucs_results(
             job_id,
             separated_dir,
@@ -59,9 +79,11 @@ def process_audio_job(
 
     # Mock mode keeps local development fast while exercising the same status,
     # Kafka, database, and object-storage paths as Demucs mode.
+    # range produces 30, 40, ... 90 because its stop value 91 is excluded.
     for progress in range(30, 91, 10):
         raise_if_job_cancelled(job_id)
         update_job_status(job_id, worker_id, "PROCESSING", progress)
+        # A short delay makes progress observable during local mock testing.
         time.sleep(0.5)
 
     return upload_mock_results(job_id, input_path)

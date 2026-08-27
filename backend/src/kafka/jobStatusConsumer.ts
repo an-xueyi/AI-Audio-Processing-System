@@ -1,12 +1,18 @@
+/* Consume worker status notifications and trigger local WebSocket refreshes. */
 import { Kafka } from "kafkajs";
 import { z } from "zod";
 import { jobStatusTopic } from "./topics.js";
 
+// Docker supplies kafka:29092; manual development falls back to localhost:9092.
 const kafkaBroker = process.env.KAFKA_BROKER || "localhost:9092";
 const groupPrefix =
   process.env.KAFKA_STATUS_CONSUMER_GROUP_PREFIX || "audio-backend-status";
+// HOSTNAME differs for every Docker replica and the process ID distinguishes
+// multiple manually started Node processes on one computer.
 const instanceId = process.env.HOSTNAME || `local-${process.pid}`;
 
+// Only a UUID jobId is needed. strict rejects extra fields, keeping this internal
+// event contract intentionally small.
 const statusEventSchema = z
   .object({
     jobId: z.string().uuid(),
@@ -14,6 +20,7 @@ const statusEventSchema = z
   .strict();
 
 const kafka = new Kafka({
+  // clientId appears in Kafka logs and metrics to identify this application.
   clientId: `audio-backend-status-${instanceId}`,
   brokers: [kafkaBroker],
 });
@@ -30,6 +37,8 @@ const consumer = kafka.consumer({
   groupId: `${groupPrefix}-${instanceId}`,
 });
 
+// Promises are saved separately: startPromise represents connection/subscription
+// startup, while runPromise represents the long-lived message-processing loop.
 let startPromise: Promise<void> | null = null;
 let runPromise: Promise<void> | null = null;
 
@@ -40,14 +49,20 @@ export async function startJobStatusConsumer(
     // Save the startup promise so two callers cannot connect and start the same
     // Kafka consumer twice. A failed start clears it so a later retry is allowed.
     startPromise = (async () => {
+      // Open the network connection and join this replica's consumer group.
       await consumer.connect();
+
+      // Subscribe only to new status events. A browser receives current state
+      // through its initial database read, so old topic history is unnecessary.
       await consumer.subscribe({
         topic: jobStatusTopic,
         fromBeginning: false,
       });
 
+      // consumer.run starts KafkaJS's long-lived polling loop.
       runPromise = consumer.run({
         eachMessage: async ({ message }) => {
+          // Tombstone records can have a null value and contain no event to parse.
           if (!message.value) {
             return;
           }
@@ -63,6 +78,7 @@ export async function startJobStatusConsumer(
             return;
           }
 
+          // Runtime validation protects downstream code from malformed producers.
           const parsedEvent = statusEventSchema.safeParse(parsedJson);
 
           if (!parsedEvent.success) {
@@ -70,39 +86,51 @@ export async function startJobStatusConsumer(
             return;
           }
 
+          // Ask this replica to query PostgreSQL and update only its own matching
+          // WebSocket clients.
           await notifyJobChanged(parsedEvent.data.jobId);
         },
       });
 
+      // runPromise lasts until stop or failure. Attach a handler so an unexpected
+      // rejection is logged instead of becoming an unhandled Promise rejection.
       void runPromise.catch((error) => {
         console.error("Job status consumer stopped unexpectedly:", error);
       });
 
       console.log(`Listening for job status events on ${jobStatusTopic}`);
     })().catch((error) => {
+      // Allow a future start attempt after failed startup instead of preserving a
+      // permanently rejected Promise.
       startPromise = null;
       throw error;
     });
   }
 
+  // Existing and new callers all wait for the same startup operation.
   await startPromise;
 }
 
 export async function stopJobStatusConsumer() {
+  // A null startPromise means this consumer was never started or already stopped.
   if (!startPromise) {
     return;
   }
 
   try {
+    // Wait for an in-progress connection before requesting a clean stop.
     await startPromise;
     await consumer.stop();
 
     if (runPromise) {
+      // stop normally resolves runPromise. Ignore its error here because the
+      // unexpected-failure handler above already logged it.
       await runPromise.catch(() => undefined);
     }
 
     await consumer.disconnect();
   } finally {
+    // Reset module state whether disconnect succeeds or throws.
     startPromise = null;
     runPromise = null;
   }
