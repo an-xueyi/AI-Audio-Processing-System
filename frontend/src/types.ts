@@ -32,6 +32,14 @@ export type Job = {
   progress: number;
   result_object_keys: Record<string, string> | null;
   error_message: string | null;
+  // PostgreSQL timestamps arrive in browser JSON as ISO-formatted strings.
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobHistoryResponse = {
+  // The backend orders this array from newest job to oldest job.
+  jobs: Job[];
 };
 
 export type DownloadUrlsResponse = {

@@ -10,6 +10,7 @@ import {
   cancelJob,
   createJob,
   findOwnedJob,
+  findRecentOwnedJobs,
 } from "../services/jobService.js";
 
 const router = Router();
@@ -65,6 +66,19 @@ router.post("/", async (req, res) => {
   );
   // 201 Created is the correct success status for a new job resource.
   res.status(201).json(job);
+});
+
+router.get("/", async (req, res) => {
+  /*
+   * This route is mounted after requireSession in server.ts. req.sessionId is
+   * therefore a verified signed-cookie value, not an owner ID supplied by the
+   * browser in a query string or request body.
+   */
+  const jobs = await findRecentOwnedJobs(req.sessionId);
+
+  // Wrap the array in an object so the response can gain pagination metadata in
+  // the future without changing the meaning of the existing `jobs` property.
+  res.json({ jobs });
 });
 
 // :id is a route parameter. Express places its value in req.params.id.

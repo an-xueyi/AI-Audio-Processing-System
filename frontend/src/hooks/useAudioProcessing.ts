@@ -3,19 +3,20 @@
  * upload it directly, create a Kafka-backed job, receive live status, cancel
  * work, and request result links. Components consume this hook as one clear API.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   cancelProcessingJob,
   createBrowserSession,
   createProcessingJob,
   fetchBackendHealth,
-  fetchDownloadUrls,
   requestPresignedUpload,
   uploadAudioFile,
 } from "../api/audioProcessing";
-import type { HealthResponse, Job } from "../types";
+import type { HealthResponse } from "../types";
 import { getAudioContentType } from "../utils/audio";
-import { useJobWebSocket } from "./useJobWebSocket";
+import { isActiveJob } from "../utils/jobs";
+import { useJobHistory } from "./useJobHistory";
+import { useSelectedJob } from "./useSelectedJob";
 
 export function useAudioProcessing() {
   // useState stores values between React renders. Each setter schedules another
@@ -25,9 +26,6 @@ export function useAudioProcessing() {
   );
   // null means the user has not selected a browser File yet.
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-
-  // job remains null until the backend successfully creates a database record.
-  const [job, setJob] = useState<Job | null>(null);
 
   // message is shared by status and upload sections as human-readable feedback.
   const [message, setMessage] = useState("Checking backend...");
@@ -39,70 +37,23 @@ export function useAudioProcessing() {
   // A file cannot be uploaded until the signed browser session has been created.
   const [sessionReady, setSessionReady] = useState(false);
 
-  // The key is a stem name and the value is its temporary signed download URL.
-  const [downloadUrls, setDownloadUrls] = useState<Record<
-    string,
-    string
-  > | null>(null);
+  const {
+    isJobHistoryLoading,
+    jobHistory,
+    loadJobHistory,
+    upsertHistoryJob,
+  } = useJobHistory();
 
-  // useCallback keeps the same function identity across renders. That prevents
-  // the WebSocket hook from reconnecting merely because the component rendered.
-  const handleJobUpdate = useCallback(async (updatedJob: Job) => {
-    // Replace the previous job snapshot so status, progress, and errors rerender.
-    setJob(updatedJob);
-
-    // A completed job requires one additional API call for temporary result URLs.
-    if (updatedJob.status === "COMPLETED") {
-      try {
-        const urls = await fetchDownloadUrls(updatedJob.id);
-        // Saving URLs causes DownloadResults to appear in App.
-        setDownloadUrls(urls);
-        setMessage("Job completed! Download links are ready.");
-      } catch (error) {
-        // Separation succeeded even if this temporary URL request failed, so the
-        // message makes that distinction instead of calling the job failed.
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : "Job completed, but download links could not be loaded.",
-        );
-      }
-      // Terminal handling is complete; do not replace this message below.
-      return;
-    }
-
-    // A failed job may contain the detailed worker error stored in PostgreSQL.
-    if (updatedJob.status === "FAILED") {
-      setMessage(
-        updatedJob.error_message
-          ? `Job failed: ${updatedJob.error_message}`
-          : "Job failed.",
-      );
-      return;
-    }
-
-    // Cancellation is expected user action and receives its own message.
-    if (updatedJob.status === "CANCELLED") {
-      setMessage("Job processing was cancelled.");
-      return;
-    }
-
-    // Any remaining status is active: PENDING, PROCESSING, or RETRYING.
-    setMessage(
-      `Job is ${updatedJob.status}. Progress: ${updatedJob.progress}%`,
-    );
-  }, []);
-
-  const { subscribeToJob, unsubscribeFromJob } = useJobWebSocket({
-    // Pass the stable update callback and React's message setter into the
-    // WebSocket hook's simpler interface.
-    onJobUpdate: handleJobUpdate,
+  const { clearSelectedJob, downloadUrls, job, selectJob } = useSelectedJob({
     onStatusMessage: setMessage,
+    upsertHistoryJob,
   });
 
   useEffect(() => {
-    // An effect performs work outside rendering. The empty dependency array at
-    // the bottom means initialization runs when this hook is first mounted.
+    // An effect performs work outside rendering. In this case, the effect
+    // creates the browser session, checks the backend, and restores job history
+    // when this hook is first used. The dependency array at the bottom lists
+    // the stable callback functions that the effect uses.
     let isActive = true;
 
     async function initializeApplication() {
@@ -117,9 +68,45 @@ export function useAudioProcessing() {
         // updating state for a screen that no longer exists.
         if (isActive) {
           setBackendHealth(health);
-          // Enabling sessionReady allows UploadPanel's button to become active.
+        }
+
+        try {
+          // History must be requested after createBrowserSession because the API
+          // derives ownership from the newly established cookie.
+          const recoveredJobs = await loadJobHistory();
+
+          if (!isActive) {
+            return;
+          }
+
+          // Enable uploading only after the initial history snapshot is applied,
+          // preventing it from overwriting a job created during recovery.
           setSessionReady(true);
-          setMessage("Backend is connected.");
+
+          // The list is newest first, so find returns the newest unfinished job.
+          const recoveredActiveJob = recoveredJobs.find(isActiveJob);
+
+          if (recoveredActiveJob) {
+            // Restore detail state before subscribing. The server sends another
+            // authoritative current snapshot immediately after subscription.
+            selectJob(recoveredActiveJob);
+            setMessage(
+              `Recovered ${recoveredActiveJob.original_file_name} at ` +
+                `${recoveredActiveJob.progress}%.`,
+            );
+          } else {
+            setMessage("Backend is connected.");
+          }
+        } catch (error) {
+          // Uploading remains usable when only history loading fails.
+          if (isActive) {
+            setSessionReady(true);
+            setMessage(
+              error instanceof Error
+                ? error.message
+                : "Backend connected, but job history could not be loaded.",
+            );
+          }
         }
       } catch {
         // Initialization failures intentionally share a simple user message. The
@@ -139,16 +126,14 @@ export function useAudioProcessing() {
       // React calls this cleanup during unmount and StrictMode's development check.
       isActive = false;
     };
-  }, []);
+  }, [loadJobHistory, selectJob]);
 
   function selectFile(file: File | null) {
     // Selecting another file resets every result belonging to the previous job
     // and closes its realtime subscription.
-    unsubscribeFromJob();
+    clearSelectedJob();
     // Store the new File object or null if the browser input was cleared.
     setSelectedFile(file);
-    setJob(null);
-    setDownloadUrls(null);
     // The ternary chooses a message based on whether a File currently exists.
     setMessage(
       file ? `Selected file: ${file.name}` : "Please choose an audio file",
@@ -196,9 +181,9 @@ export function useAudioProcessing() {
         presignData.objectKey,
       );
 
-      setJob(createdJob);
-      // Step 4: watch Kafka-driven backend updates over a WebSocket.
-      subscribeToJob(createdJob.id);
+      // Make the new job current and add it to the beginning of visible history.
+      // Step 4: show the job, add history, and watch WebSocket updates.
+      selectJob(createdJob);
       setMessage("Job created. The worker will process it in the background.");
     } catch (error) {
       // All three network stages report through one user-visible error path.
@@ -221,11 +206,8 @@ export function useAudioProcessing() {
       setIsCancelling(true);
       setMessage("Cancelling job processing...");
       const cancelledJob = await cancelProcessingJob(job.id);
-      // Use the database response as the authoritative final state.
-      setJob(cancelledJob);
-
-      // A cancelled job must not show result links from an earlier state.
-      setDownloadUrls(null);
+      // Use the database response as authoritative detail and history state.
+      selectJob(cancelledJob);
       setMessage("Job processing was cancelled.");
     } catch (error) {
       setMessage(
@@ -245,11 +227,14 @@ export function useAudioProcessing() {
     downloadUrls,
     isUploading,
     isCancelling,
+    isJobHistoryLoading,
     job,
+    jobHistory,
     message,
     selectedFile,
     sessionReady,
     selectFile,
+    selectHistoryJob: selectJob,
     startProcessing,
   };
 }

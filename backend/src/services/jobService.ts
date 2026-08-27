@@ -20,6 +20,10 @@ export type JobRecord = {
 const jobColumns = `id, original_file_name, input_object_key, status, progress,
   result_object_keys, error_message, created_at, updated_at`;
 
+// Limit one history response so a long-lived browser session cannot make the API
+// load and serialize an unlimited number of old jobs in a single request.
+export const jobHistoryLimit = 20;
+
 export async function createJob(
   ownerId: string,
   originalFileName: string,
@@ -173,4 +177,28 @@ export async function findOwnedJob(
   // Nullish coalescing changes an absent first row (undefined) into the explicit
   // null promised by this function's return type.
   return result.rows[0] ?? null;
+}
+
+export async function findRecentOwnedJobs(
+  ownerId: string,
+): Promise<JobRecord[]> {
+  /*
+   * Return recent history directly from PostgreSQL instead of browser storage.
+   * The signed session ID is the ownership key, so a page refresh can recover
+   * jobs while a different browser session cannot read them.
+   */
+  const result = await pool.query<JobRecord>(
+    `SELECT ${jobColumns}
+     FROM jobs
+     WHERE owner_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    // $1 safely supplies the verified owner UUID. $2 keeps the response bounded
+    // without inserting the numeric limit directly into the SQL text.
+    [ownerId, jobHistoryLimit],
+  );
+
+  // pg always returns an array for rows. It is empty when this session has never
+  // created a job, so callers do not need a special null check.
+  return result.rows;
 }

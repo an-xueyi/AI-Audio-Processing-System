@@ -48,6 +48,7 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 - Direct browser-to-object-storage uploads with temporary presigned URLs
 - Audio type, extension, ownership, and size validation
 - Session-based job isolation and temporary result download URLs
+- Session-owned job history with active-job recovery after a page refresh
 - PostgreSQL transactional outbox for reliable Kafka publishing
 - Nginx load balancing across horizontally scalable backend replicas
 - Horizontally scalable Kafka consumer workers

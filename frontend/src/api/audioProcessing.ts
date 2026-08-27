@@ -9,6 +9,7 @@ import type {
   DownloadUrlsResponse,
   HealthResponse,
   Job,
+  JobHistoryResponse,
   PresignResponse,
 } from "../types";
 
@@ -180,4 +181,25 @@ export async function fetchJob(jobId: string): Promise<Job> {
   }
 
   return (await response.json()) as Job;
+}
+
+export async function fetchJobHistory(): Promise<Job[]> {
+  /*
+   * Ask for jobs owned by the current signed browser session. No owner ID is
+   * placed in this URL: the browser sends the HttpOnly session cookie, and the
+   * backend derives ownership from that verified cookie.
+   */
+  const response = await fetch(`${API_BASE_URL}/api/jobs`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await getApiErrorMessage(response, "Failed to load job history"),
+    );
+  }
+
+  // Extract the array from { jobs: [...] } so callers work directly with Job[].
+  const data = (await response.json()) as JobHistoryResponse;
+  return data.jobs;
 }

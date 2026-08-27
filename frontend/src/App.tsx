@@ -6,6 +6,7 @@
 import { DownloadResults } from "./components/DownloadResults";
 import { Hero } from "./components/Hero";
 import { JobDetails } from "./components/JobDetails";
+import { JobHistory } from "./components/JobHistory";
 import { SystemStatus } from "./components/SystemStatus";
 import { UploadPanel } from "./components/UploadPanel";
 import { useAudioProcessing } from "./hooks/useAudioProcessing";
@@ -19,11 +20,14 @@ function App() {
     downloadUrls,
     isUploading,
     isCancelling,
+    isJobHistoryLoading,
     job,
+    jobHistory,
     message,
     selectedFile,
     sessionReady,
     selectFile,
+    selectHistoryJob,
     startProcessing,
   } = useAudioProcessing();
 
@@ -45,6 +49,20 @@ function App() {
         onFileSelected={selectFile}
         onStartProcessing={startProcessing}
       />
+
+      {/*
+        The backend health information becomes available before job-history
+        loading finishes. Showing the panel at that point lets the user see its
+        loading message instead of making the whole section suddenly appear.
+      */}
+      {backendHealth && (
+        <JobHistory
+          isLoading={isJobHistoryLoading}
+          jobs={jobHistory}
+          selectedJobId={job?.id ?? null}
+          onJobSelected={selectHistoryJob}
+        />
+      )}
 
       {/* `&&` conditionally renders job information only after a job exists. */}
       {/* The job value is known to be non-null inside this conditional branch. */}
