@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test": "tsc --project tsconfig.test.json && tsx --test test/*.test.ts",
     "start": "node dist/server.js",
     "cleanup": "node dist/cleanup.js"
   },

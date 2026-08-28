@@ -5,11 +5,13 @@ import dotenv from "dotenv";
 // dotenv deliberately does not replace values that are present in the process.
 dotenv.config();
 
-function readPositiveInteger(name: string, fallback: number): number {
+export function parsePositiveInteger(
+  name: string,
+  rawValue: string | undefined,
+  fallback: number,
+): number {
   // Environment variables are text. Use the documented fallback only when the
   // variable is absent; a present but invalid value should fail during startup.
-  const rawValue = process.env[name];
-
   if (rawValue === undefined) {
     return fallback;
   }
@@ -23,6 +25,12 @@ function readPositiveInteger(name: string, fallback: number): number {
   }
 
   return parsedValue;
+}
+
+function readPositiveInteger(name: string, fallback: number): number {
+  // Keep process.env access in this small wrapper so parsePositiveInteger can be
+  // tested with explicit values without changing global environment variables.
+  return parsePositiveInteger(name, process.env[name], fallback);
 }
 
 // New terminal jobs keep private audio for seven days unless deployment

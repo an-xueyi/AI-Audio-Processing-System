@@ -12,6 +12,7 @@ import {
   findOwnedJob,
   findRecentOwnedJobs,
 } from "../services/jobService.js";
+import { hasStorageExpired } from "../services/storageLifecycle.js";
 
 const router = Router();
 // Reusing one UUID schema keeps every route's job-id validation consistent.
@@ -133,11 +134,7 @@ router.get("/:id/downloads", async (req, res) => {
 
   // Expiration is enforced when its time arrives, even if the asynchronous
   // cleanup service has not physically removed the MinIO objects yet.
-  const storageHasExpired =
-    job.storage_deleted_at !== null ||
-    (job.storage_expires_at !== null && job.storage_expires_at <= new Date());
-
-  if (storageHasExpired) {
+  if (hasStorageExpired(job)) {
     // 410 Gone means the resource existed previously but is intentionally no
     // longer available. This is more precise than 404 for retained job history.
     return res.status(410).json({

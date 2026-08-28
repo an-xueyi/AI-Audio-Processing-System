@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    // Node supplies the built-in test and assertion modules used by test files.
+    "types": ["vite/client", "node"]
+  },
+  // Type-check application imports and tests together without producing output.
+  "include": ["src", "test"]
+}

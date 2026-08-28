@@ -1,0 +1,6 @@
+{
+  // This nearest configuration keeps frontend tests in the Vite + Node type
+  // environment instead of treating them as files outside the main project.
+  "extends": "../tsconfig.test.json",
+  "include": ["../src", "."]
+}

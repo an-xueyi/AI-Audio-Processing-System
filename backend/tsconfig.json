@@ -40,5 +40,8 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
-  }
+  },
+  // Production compilation emits only application source. Tests use the
+  // separate no-output configuration below.
+  "include": ["src/**/*.ts"]
 }

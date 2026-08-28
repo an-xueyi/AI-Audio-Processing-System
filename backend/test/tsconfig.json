@@ -1,0 +1,6 @@
+{
+  // VS Code searches upward from an open test file for the nearest tsconfig.
+  // Point it to the no-output test project so Node's built-in module types load.
+  "extends": "../tsconfig.test.json",
+  "include": ["../src/**/*.ts", "./**/*.ts"]
+}
