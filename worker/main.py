@@ -12,7 +12,13 @@ from config import (
     WORKER_ID,
 )
 from job_handler import handle_job
+from kafka_partitions import (
+    on_partitions_assigned,
+    on_partitions_lost,
+    on_partitions_revoked,
+)
 from observability import log_info
+from worker_presence import WorkerPresence
 
 # False means the process should continue polling Kafka. Signal handlers change
 # this shared flag instead of abruptly exiting inside the handler.
@@ -68,12 +74,22 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
 
-    # Build one consumer for this worker process and subscribe it to new-job events.
+    # Build one consumer and one independent registry heartbeat for this process.
     consumer = create_consumer()
-    consumer.subscribe([JOB_CREATED_TOPIC])
-    log_info("worker_started", kafkaTopic=JOB_CREATED_TOPIC)
+    presence = WorkerPresence()
+    presence.start()
 
     try:
+        # Rebalance callbacks make Kafka's distribution decisions visible without
+        # changing which worker Kafka assigns to each partition.
+        consumer.subscribe(
+            [JOB_CREATED_TOPIC],
+            on_assign=on_partitions_assigned,
+            on_revoke=on_partitions_revoked,
+            on_lost=on_partitions_lost,
+        )
+        log_info("worker_started", kafkaTopic=JOB_CREATED_TOPIC)
+
         # Keep requesting Kafka messages until a signal changes the shared flag.
         while not shutdown_requested:
             # poll waits at most one second for a message. The timeout allows the
@@ -93,20 +109,32 @@ def main() -> None:
             job = json.loads(message.value().decode("utf-8"))
             # Do not log the complete event because it contains the user's file
             # name and private object key. jobId is sufficient for correlation.
-            log_info("kafka_job_received", jobId=job.get("jobId"))
+            job_id = job["jobId"]
+            log_info("kafka_job_received", jobId=job_id)
 
-            # handle_job returns False only when shutdown was requested before the
-            # message could be safely completed and committed.
-            if not handle_job(job, is_shutdown_requested):
+            # BUSY starts when the worker accepts a Kafka message, including time
+            # waiting to claim a stale lease. finally restores IDLE after every
+            # success, skip, cancellation, failure, or raised exception.
+            presence.mark_busy(job_id)
+            try:
+                message_was_handled = handle_job(job, is_shutdown_requested)
+            finally:
+                presence.mark_idle()
+
+            # False means shutdown arrived before the message could be completed.
+            if not message_was_handled:
                 break
 
             # A synchronous commit waits for Kafka to confirm the saved offset.
             # The next message is not accepted as finished until that succeeds.
             consumer.commit(message=message, asynchronous=False)
-            log_info("kafka_offset_committed", jobId=job["jobId"])
+            log_info("kafka_offset_committed", jobId=job_id)
     finally:
         # close leaves the consumer group and commits no additional messages.
         consumer.close()
+        # Stop the heartbeat after Kafka is closed so this worker is no longer
+        # advertised as available once it has left the consumer group.
+        presence.stop()
         log_info("worker_shutdown_completed")
 
 

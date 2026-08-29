@@ -82,3 +82,24 @@ if JOB_HEARTBEAT_INTERVAL_SECONDS >= JOB_LEASE_TIMEOUT_SECONDS:
         "JOB_HEARTBEAT_INTERVAL_SECONDS must be less than "
         "JOB_LEASE_TIMEOUT_SECONDS"
     )
+
+# Worker-presence heartbeats describe the container itself and are intentionally
+# separate from the job lease above. An idle worker has no job lease but should
+# still report that it is alive and ready to consume a Kafka message.
+WORKER_HEARTBEAT_INTERVAL_SECONDS = max(
+    5,
+    int(os.getenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "15")),
+)
+
+WORKER_STALE_AFTER_SECONDS = max(
+    15,
+    int(os.getenv("WORKER_STALE_AFTER_SECONDS", "60")),
+)
+
+if WORKER_HEARTBEAT_INTERVAL_SECONDS >= WORKER_STALE_AFTER_SECONDS:
+    # At least one heartbeat must be expected before the worker is considered
+    # stale; otherwise a healthy worker could repeatedly become unhealthy.
+    raise RuntimeError(
+        "WORKER_HEARTBEAT_INTERVAL_SECONDS must be less than "
+        "WORKER_STALE_AFTER_SECONDS"
+    )
