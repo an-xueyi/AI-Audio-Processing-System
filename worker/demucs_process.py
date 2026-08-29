@@ -11,6 +11,7 @@ from cancellation import JobCancelled
 from config import DEMUCS_MODEL
 from database import update_job_status
 from job_control import raise_if_job_cancelled
+from observability import log_info
 
 # demucs_runner prefixes structured JSON with this exact text. Ordinary model
 # logs omit the prefix and are printed for humans instead of parsed as events.
@@ -114,8 +115,26 @@ def run_demucs(
 
         # Lines without the marker are normal Demucs/PyTorch diagnostic output.
         if not line.startswith(EVENT_PREFIX):
-            # rstrip removes the existing newline because print adds its own.
-            print(line.rstrip())
+            # rstrip removes the newline already supplied by the child process.
+            # Keep the text in a named JSON field so all Docker log lines have
+            # the same searchable format. The model output does not contain the
+            # user's object-storage key or temporary signed download URL.
+            message = line.rstrip()
+
+            # Third-party model libraries sometimes print the file they are
+            # processing. Replace both the complete temporary path and its
+            # filename before the text reaches persistent container logs. The
+            # job ID remains available as the safe correlation value.
+            message = message.replace(str(job_workspace), "<job-workspace>")
+            message = message.replace(str(input_path), "<input-audio>")
+            message = message.replace(input_path.name, "<input-file>")
+
+            if message:
+                log_info(
+                    "demucs_output",
+                    jobId=job_id,
+                    message=message,
+                )
             return
 
         # Remove only the known prefix, then decode the remaining JSON event.

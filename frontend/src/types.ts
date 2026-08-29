@@ -54,6 +54,9 @@ export type DownloadUrlsResponse = {
 
 export type ApiErrorResponse = {
   error?: string;
+  // Unexpected backend failures include this safe identifier. It points to one
+  // server log record but reveals no stack trace, password, or storage location.
+  requestId?: string;
 };
 
 export type JobWebSocketMessage =

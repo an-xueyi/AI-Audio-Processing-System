@@ -5,27 +5,13 @@
  */
 import { API_BASE_URL } from "../config";
 import type {
-  ApiErrorResponse,
   DownloadUrlsResponse,
   HealthResponse,
   Job,
   JobHistoryResponse,
   PresignResponse,
 } from "../types";
-
-async function getApiErrorMessage(response: Response, fallback: string) {
-  try {
-    // Error responses are expected to contain { error: "..." }. Parsing can
-    // itself fail for an empty or non-JSON response, so a readable fallback is
-    // always returned from the catch branch.
-    const data = (await response.json()) as ApiErrorResponse;
-    // Logical OR chooses the server's non-empty message or the supplied default.
-    return data.error || fallback;
-  } catch {
-    // Parsing failure should not hide the original API operation's useful fallback.
-    return fallback;
-  }
-}
+import { getApiErrorMessage } from "./apiErrors";
 
 export async function createBrowserSession(): Promise<void> {
   // POST asks the backend to create a new session or refresh an existing cookie.

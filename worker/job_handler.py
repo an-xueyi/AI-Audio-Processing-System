@@ -16,6 +16,7 @@ from database import begin_job_attempt, claim_job, update_job_status
 from job_control import raise_if_job_cancelled
 from lease import JobLeaseHeartbeat
 from messaging import publish_dead_letter
+from observability import log_error, log_info, log_warning
 from processing import create_job_workspace, process_audio_job
 
 # Do not wait longer than ten seconds between claim checks, even when retry
@@ -55,9 +56,11 @@ def wait_for_job_claim(
         if current_status in TERMINAL_STATUSES:
             return False, current_status
 
-        print(
-            f"Job {job_id} is currently owned by another worker. "
-            f"Checking again in {CLAIM_RETRY_INTERVAL_SECONDS} seconds."
+        log_info(
+            "job_claim_waiting",
+            jobId=job_id,
+            currentStatus=current_status,
+            retryInSeconds=CLAIM_RETRY_INTERVAL_SECONDS,
         )
         # sleep pauses this worker without consuming CPU before checking the lease again.
         time.sleep(CLAIM_RETRY_INTERVAL_SECONDS)
@@ -72,6 +75,9 @@ def _run_attempts(job: dict) -> None:
 
     # range excludes its upper bound, so +1 includes MAX_PROCESSING_ATTEMPTS.
     for attempt in range(1, MAX_PROCESSING_ATTEMPTS + 1):
+        # monotonic measures elapsed time and is not affected if the computer's
+        # wall clock changes while a long audio model is running.
+        attempt_started_at = time.monotonic()
         # Every attempt starts with a clean directory so failed partial output is removed.
         job_workspace = create_job_workspace(job_id)
 
@@ -79,10 +85,12 @@ def _run_attempts(job: dict) -> None:
             # PostgreSQL increments its durable counter and confirms this worker
             # still owns the lease before expensive work begins.
             recorded_attempt = begin_job_attempt(job_id, WORKER_ID)
-            print(
-                f"Processing job {job_id}, local attempt "
-                f"{attempt}/{MAX_PROCESSING_ATTEMPTS}, "
-                f"recorded attempt {recorded_attempt}"
+            log_info(
+                "job_attempt_started",
+                jobId=job_id,
+                localAttempt=attempt,
+                maxAttempts=MAX_PROCESSING_ATTEMPTS,
+                recordedAttempt=recorded_attempt,
             )
             # Successful processing returns permanent private storage keys by stem.
             result_keys = process_audio_job(
@@ -99,7 +107,13 @@ def _run_attempts(job: dict) -> None:
                 100,
                 result_keys,
             )
-            print(f"Job {job_id} marked as COMPLETED")
+            log_info(
+                "job_completed",
+                jobId=job_id,
+                progress=100,
+                attempt=attempt,
+                durationSeconds=round(time.monotonic() - attempt_started_at, 2),
+            )
             # End the retry loop immediately after successful completion.
             return
         except JobCancelled:
@@ -122,9 +136,16 @@ def _run_attempts(job: dict) -> None:
                     10,
                     error_message=error_message,
                 )
-                print(
-                    f"Job {job_id} attempt {attempt} failed. "
-                    f"Retrying in {delay} seconds."
+                log_warning(
+                    "job_attempt_retry_scheduled",
+                    jobId=job_id,
+                    attempt=attempt,
+                    retryInSeconds=delay,
+                    durationSeconds=round(
+                        time.monotonic() - attempt_started_at,
+                        2,
+                    ),
+                    error=error_message,
                 )
                 time.sleep(delay)
                 continue
@@ -143,9 +164,15 @@ def _run_attempts(job: dict) -> None:
                 0,
                 error_message=error_message,
             )
-            print(
-                f"Job {job_id} marked as FAILED "
-                "and sent to the dead-letter topic"
+            log_error(
+                "job_failed_dead_lettered",
+                jobId=job_id,
+                attempts=MAX_PROCESSING_ATTEMPTS,
+                durationSeconds=round(
+                    time.monotonic() - attempt_started_at,
+                    2,
+                ),
+                error=error_message,
             )
 
 
@@ -166,15 +193,16 @@ def handle_job(
 
     # A message may outlive a manually deleted database row; skip such stale input.
     if current_status is None:
-        print(f"Skipping unknown job {job_id}")
+        log_warning("unknown_job_skipped", jobId=job_id)
         return True
 
     # Terminal or otherwise unavailable jobs are intentionally skipped. Returning
     # True allows main.py to commit this duplicate/stale Kafka event.
     if not job_was_claimed:
-        print(
-            f"Skipping job {job_id}; its current status is "
-            f"{current_status} and it is not available to claim"
+        log_info(
+            "unavailable_job_skipped",
+            jobId=job_id,
+            currentStatus=current_status,
         )
         return True
 
@@ -189,7 +217,7 @@ def handle_job(
             _run_attempts(job)
     except JobCancelled:
         # The API already wrote CANCELLED, so the worker only logs and cleans files.
-        print(f"Job {job_id} processing stopped after cancellation")
+        log_info("job_cancelled_during_processing", jobId=job_id)
     finally:
         # finally runs after success, cancellation, and failure. Temporary audio
         # can be large, so cleanup must not depend on the happy path.

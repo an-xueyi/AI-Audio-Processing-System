@@ -1,6 +1,7 @@
 /* Repeatedly move durable PostgreSQL outbox events into Kafka. */
 import { clearInterval } from "timers";
 import { pool } from "../db.js";
+import { logger } from "../observability/logger.js";
 import { connectKafkaProducer, producer } from "./producer.js";
 
 // This type documents the columns selected from each pending outbox row.
@@ -101,6 +102,13 @@ export async function publishPendingOutboxEvents() {
             WHERE id = $1`,
             [event.id, errorMessage],
           );
+
+          logger.warn("outbox_event_publish_failed", {
+            error,
+            eventId: event.id,
+            eventKey: event.event_key,
+            topic: event.topic,
+          });
         }
       }
       // Commit all successful and failed-attempt updates, then release row locks.
@@ -114,7 +122,7 @@ export async function publishPendingOutboxEvents() {
       client.release();
     }
   } catch (error) {
-    console.error("Outbox publishing failed:", error);
+    logger.error("outbox_batch_failed", { error });
   } finally {
     // Permit the next interval tick to begin another publishing pass.
     isPublishing = false;

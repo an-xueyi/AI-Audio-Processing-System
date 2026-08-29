@@ -5,6 +5,7 @@ import {
   cleanupIntervalSeconds,
 } from "./config/retention.js";
 import { pool } from "./db.js";
+import { logger } from "./observability/logger.js";
 import { cleanupExpiredStorageBatch } from "./services/storageCleanup.js";
 
 let shutdownRequested = false;
@@ -27,16 +28,17 @@ function waitForNextCycle(milliseconds: number): Promise<void> {
 }
 
 function requestShutdown(signal: string) {
-  console.log(`Received ${signal}. Storage cleanup will stop safely.`);
+  logger.info("storage_cleanup_shutdown_requested", { signal });
   shutdownRequested = true;
   finishCurrentDelay?.();
 }
 
 async function runCleanupLoop() {
-  console.log(
-    `Storage cleanup started: batch=${cleanupBatchSize}, ` +
-      `interval=${cleanupIntervalSeconds}s`,
-  );
+  logger.info("storage_cleanup_started", {
+    batchSize: cleanupBatchSize,
+    claimTimeoutMinutes: cleanupClaimTimeoutMinutes,
+    intervalSeconds: cleanupIntervalSeconds,
+  });
 
   while (!shutdownRequested) {
     try {
@@ -47,15 +49,12 @@ async function runCleanupLoop() {
       );
 
       if (result.claimed > 0) {
-        console.log(
-          `Cleanup cycle finished: claimed=${result.claimed}, ` +
-            `deleted=${result.deleted}, failed=${result.failed}`,
-        );
+        logger.info("storage_cleanup_cycle_completed", result);
       }
     } catch (error) {
       // Infrastructure failure ends only this cycle. The next interval retries,
       // allowing PostgreSQL or MinIO to recover without restarting the process.
-      console.error("Storage cleanup cycle failed:", error);
+      logger.error("storage_cleanup_cycle_failed", { error });
     }
 
     if (!shutdownRequested) {
@@ -65,14 +64,13 @@ async function runCleanupLoop() {
 
   // No new queries will begin after this point, so the shared pool can close.
   await pool.end();
-  console.log("Storage cleanup stopped");
+  logger.info("storage_cleanup_stopped");
 }
 
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 
 void runCleanupLoop().catch((error) => {
-  console.error("Storage cleanup stopped unexpectedly:", error);
+  logger.error("storage_cleanup_stopped_unexpectedly", { error });
   process.exit(1);
 });
-

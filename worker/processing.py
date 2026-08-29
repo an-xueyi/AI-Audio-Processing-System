@@ -8,6 +8,7 @@ from config import PROCESSING_MODE, WORK_DIR
 from database import update_job_status
 from demucs_process import run_demucs
 from job_control import raise_if_job_cancelled
+from observability import log_info
 from storage import download_input_file, upload_demucs_results, upload_mock_results
 
 
@@ -43,7 +44,12 @@ def process_audio_job(
 
     # Download from the private object key supplied by the validated job event.
     input_path = download_input_file(input_object_key, job_workspace)
-    print(f"Downloaded input file to {input_path}")
+    # Log only the base filename, not the full temporary path or private object key.
+    log_info(
+        "job_input_downloaded",
+        jobId=job_id,
+        inputFileName=input_path.name,
+    )
 
     update_job_status(job_id, worker_id, "PROCESSING", 20)
     raise_if_job_cancelled(job_id)

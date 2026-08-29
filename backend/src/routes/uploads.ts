@@ -12,6 +12,7 @@ import {
   hasAllowedAudioExtension,
   maxUploadBytes,
 } from "../config/upload.js";
+import { logger } from "../observability/logger.js";
 import { s3PublicClient, bucketName } from "../storage/s3.js";
 
 const router = Router();
@@ -82,6 +83,13 @@ router.post("/presign", async (req, res) => {
   // its permission until expiration, so it should not be logged or persisted.
   const uploadUrl = await getSignedUrl(s3PublicClient, command, {
     expiresIn: 60 * 5,
+  });
+
+  // Never log uploadUrl because it is temporary authorization. These fields are
+  // enough to explain volume and policy behavior without exposing permission.
+  logger.info("upload_permission_created", {
+    contentType,
+    fileSize,
   });
 
   // Return only upload permission and metadata needed by the browser's next step.

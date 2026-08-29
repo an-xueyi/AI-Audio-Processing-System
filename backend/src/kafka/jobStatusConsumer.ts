@@ -1,6 +1,7 @@
 /* Consume worker status notifications and trigger local WebSocket refreshes. */
 import { Kafka } from "kafkajs";
 import { z } from "zod";
+import { logger } from "../observability/logger.js";
 import { jobStatusTopic } from "./topics.js";
 
 // Docker supplies kafka:29092; manual development falls back to localhost:9092.
@@ -74,7 +75,7 @@ export async function startJobStatusConsumer(
           try {
             parsedJson = JSON.parse(message.value.toString());
           } catch {
-            console.error("Ignoring invalid job status event JSON");
+            logger.warn("job_status_event_invalid_json");
             return;
           }
 
@@ -82,7 +83,7 @@ export async function startJobStatusConsumer(
           const parsedEvent = statusEventSchema.safeParse(parsedJson);
 
           if (!parsedEvent.success) {
-            console.error("Ignoring invalid job status event payload");
+            logger.warn("job_status_event_invalid_payload");
             return;
           }
 
@@ -95,10 +96,10 @@ export async function startJobStatusConsumer(
       // runPromise lasts until stop or failure. Attach a handler so an unexpected
       // rejection is logged instead of becoming an unhandled Promise rejection.
       void runPromise.catch((error) => {
-        console.error("Job status consumer stopped unexpectedly:", error);
+        logger.error("job_status_consumer_stopped", { error });
       });
 
-      console.log(`Listening for job status events on ${jobStatusTopic}`);
+      logger.info("job_status_consumer_started", { topic: jobStatusTopic });
     })().catch((error) => {
       // Allow a future start attempt after failed startup instead of preserving a
       // permanently rejected Promise.

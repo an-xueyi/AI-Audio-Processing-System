@@ -4,6 +4,7 @@ import threading
 
 from config import JOB_HEARTBEAT_INTERVAL_SECONDS
 from database import refresh_job_lease
+from observability import log_error, log_warning
 
 
 class JobLeaseHeartbeat:
@@ -47,15 +48,18 @@ class JobLeaseHeartbeat:
                 if not lease_was_refreshed:
                     # Another worker, cancellation, or terminal status made this
                     # heartbeat obsolete; end this thread permanently.
-                    print(
-                        f"Worker {self.worker_id} lost the lease "
-                        f"for job {self.job_id}"
+                    log_warning(
+                        "job_lease_lost",
+                        jobId=self.job_id,
+                        leaseWorkerId=self.worker_id,
                     )
                     return
             except Exception as error:
                 # A temporary database error is logged but does not immediately end
                 # the thread; a later interval may refresh before lease expiration.
-                print(
-                    f"Worker {self.worker_id} could not refresh the lease "
-                    f"for job {self.job_id}: {error}"
+                log_error(
+                    "job_lease_refresh_failed",
+                    jobId=self.job_id,
+                    leaseWorkerId=self.worker_id,
+                    error=str(error),
                 )

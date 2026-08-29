@@ -1,8 +1,14 @@
 /* Own the WebSocket server, connection authentication, and job broadcasts. */
 import type { Server } from "http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import { readSessionId } from "../auth/session.js";
 import { isAllowedOrigin } from "../config/security.js";
+import { logger } from "../observability/logger.js";
+import {
+  recordWebSocketClosed,
+  recordWebSocketOpened,
+} from "../observability/metrics.js";
 import {
   clearSubscription,
   handleClientMessage,
@@ -46,10 +52,20 @@ export function createJobUpdatesService(
   webSocketServer.on("connection", (webSocket, request) => {
     // Type assertion allows application-specific fields declared on JobSocket.
     const socket = webSocket as JobSocket;
+    const connectionId = randomUUID();
+
+    // Count every accepted TCP/WebSocket connection, including one that is later
+    // rejected by origin or session policy. `once` guarantees one decrement.
+    recordWebSocketOpened();
+    socket.once("close", (code) => {
+      recordWebSocketClosed();
+      logger.info("websocket_closed", { connectionId, code });
+    });
 
     // WebSockets are not protected by normal browser CORS enforcement, so origin
     // validation is repeated explicitly during the handshake connection event.
     if (!isAllowedOrigin(request.headers.origin)) {
+      logger.warn("websocket_rejected_origin", { connectionId });
       sendJson(socket, {
         type: "error",
         error: "WebSocket origin is not allowed",
@@ -64,6 +80,7 @@ export function createJobUpdatesService(
     const sessionId = readSessionId(request.headers.cookie);
 
     if (!sessionId) {
+      logger.warn("websocket_rejected_session", { connectionId });
       sendJson(socket, {
         type: "error",
         error: "A valid session is required",
@@ -76,6 +93,7 @@ export function createJobUpdatesService(
     socket.isAlive = true;
     socket.sessionId = sessionId;
     socket.subscriptionVersion = 0;
+    logger.info("websocket_connected", { connectionId });
 
     // The ws client automatically replies to a ping with pong. Receiving it proves
     // the connection is still able to communicate in both directions.
@@ -96,7 +114,7 @@ export function createJobUpdatesService(
       // Convert text bytes to a string and start async validation/handling. Attach
       // catch here because an event callback cannot return an awaited Promise.
       void handleClientMessage(socket, data.toString()).catch((error) => {
-        console.error("WebSocket message handling failed:", error);
+        logger.error("websocket_message_failed", { connectionId, error });
         sendJson(socket, {
           type: "error",
           error: "Failed to handle WebSocket message",

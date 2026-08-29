@@ -1,6 +1,7 @@
 /* HTTP routes for creating, reading, cancelling, and downloading owned jobs. */
 import { Router } from "express";
 import { z } from "zod";
+import { logger } from "../observability/logger.js";
 import {
   createResultDownloadUrls,
   UploadValidationError,
@@ -65,6 +66,7 @@ router.post("/", async (req, res) => {
     originalFileName,
     inputObjectKey,
   );
+  logger.info("job_created", { jobId: job.id, status: job.status });
   // 201 Created is the correct success status for a new job resource.
   res.status(201).json(job);
 });
@@ -107,6 +109,10 @@ router.post("/:id/cancel", async (req, res) => {
   }
 
   // Successful cancellation returns the authoritative updated database record.
+  logger.info("job_cancelled", {
+    jobId: result.job.id,
+    status: result.job.status,
+  });
   res.json(result.job);
 });
 
@@ -152,6 +158,13 @@ router.get("/:id/downloads", async (req, res) => {
   // The database stores stable private object keys, not long-lived public URLs.
   // Fresh temporary download URLs are created only when the owner requests them.
   const downloadUrls = await createResultDownloadUrls(job.result_object_keys);
+
+  // Log only job identity and count. Signed URLs contain credentials and must
+  // never be written to logs, even though they expire after five minutes.
+  logger.info("result_download_urls_created", {
+    jobId: job.id,
+    resultCount: Object.keys(downloadUrls).length,
+  });
 
   res.json({
     jobId: job.id,

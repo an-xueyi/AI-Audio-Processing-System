@@ -12,6 +12,7 @@ from config import (
     WORKER_ID,
 )
 from job_handler import handle_job
+from observability import log_info
 
 # False means the process should continue polling Kafka. Signal handlers change
 # this shared flag instead of abruptly exiting inside the handler.
@@ -25,9 +26,9 @@ def request_shutdown(signal_number, _frame) -> None:
     # Signal handlers should do very little work. Setting a flag lets the normal
     # control flow finish the active job and close Kafka cleanly.
     shutdown_requested = True
-    print(
-        f"Worker {WORKER_ID} received signal {signal_number}. "
-        "It will stop after its current job."
+    log_info(
+        "worker_shutdown_requested",
+        signalNumber=signal_number,
     )
 
 
@@ -70,10 +71,7 @@ def main() -> None:
     # Build one consumer for this worker process and subscribe it to new-job events.
     consumer = create_consumer()
     consumer.subscribe([JOB_CREATED_TOPIC])
-    print(
-        f"Worker {WORKER_ID} listening for messages on topic: "
-        f"{JOB_CREATED_TOPIC}"
-    )
+    log_info("worker_started", kafkaTopic=JOB_CREATED_TOPIC)
 
     try:
         # Keep requesting Kafka messages until a signal changes the shared flag.
@@ -93,8 +91,9 @@ def main() -> None:
             # Kafka returns bytes. Decode UTF-8 text, then parse that JSON text
             # into the Python dictionary expected by handle_job.
             job = json.loads(message.value().decode("utf-8"))
-            print(f"Worker {WORKER_ID} received job:")
-            print(job)
+            # Do not log the complete event because it contains the user's file
+            # name and private object key. jobId is sufficient for correlation.
+            log_info("kafka_job_received", jobId=job.get("jobId"))
 
             # handle_job returns False only when shutdown was requested before the
             # message could be safely completed and committed.
@@ -104,11 +103,11 @@ def main() -> None:
             # A synchronous commit waits for Kafka to confirm the saved offset.
             # The next message is not accepted as finished until that succeeds.
             consumer.commit(message=message, asynchronous=False)
-            print(f"Committed Kafka offset for job {job['jobId']}")
+            log_info("kafka_offset_committed", jobId=job["jobId"])
     finally:
         # close leaves the consumer group and commits no additional messages.
         consumer.close()
-        print(f"Worker {WORKER_ID} shutdown completed")
+        log_info("worker_shutdown_completed")
 
 
 if __name__ == "__main__":

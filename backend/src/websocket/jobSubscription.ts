@@ -1,5 +1,6 @@
 /* Validate browser commands and maintain one job subscription per WebSocket. */
 import { WebSocket } from "ws";
+import { logger } from "../observability/logger.js";
 import { findOwnedJob } from "../services/jobService.js";
 import { clientMessageSchema } from "./jobProtocol.js";
 
@@ -134,7 +135,10 @@ export async function refreshSubscription(
     } while (subscription.refreshRequested);
   } catch (error) {
     // Keep detailed diagnostics on the server and send a generic client message.
-    console.error("WebSocket job refresh failed:", error);
+    logger.error("websocket_job_refresh_failed", {
+      error,
+      jobId: subscription.jobId,
+    });
     sendJson(socket, {
       type: "error",
       error: "Failed to fetch job status",

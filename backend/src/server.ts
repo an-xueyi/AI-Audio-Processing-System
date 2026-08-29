@@ -14,6 +14,9 @@ import { isAllowedOrigin } from "./config/security.js";
 import { pool } from "./db.js";
 import { requireAllowedOrigin } from "./middleware/origin.js";
 import { apiRateLimit, uploadRateLimit } from "./middleware/rateLimits.js";
+import { observeRequest } from "./middleware/requestObservability.js";
+import { logger } from "./observability/logger.js";
+import { getHttpMetricsSnapshot } from "./observability/metrics.js";
 import jobsRouter from "./routes/jobs.js";
 import sessionRouter from "./routes/session.js";
 import uploadsRouter from "./routes/uploads.js";
@@ -27,6 +30,7 @@ import {
   stopJobStatusConsumer,
 } from "./kafka/jobStatusConsumer.js";
 import { createJobUpdatesService } from "./websocket/jobUpdates.js";
+import { getDurableOperationsSnapshot } from "./services/operationsService.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 
 // Express stores the middleware and route pipeline in this application object.
@@ -43,6 +47,10 @@ app.disable("x-powered-by");
  * supply an untrusted forwarded address to the container.
  */
 app.set("trust proxy", 1);
+
+// Observability runs before security and route middleware so rejected requests,
+// not-found responses, and unexpected errors all receive a correlation ID.
+app.use(observeRequest);
 
 // Helmet adds several defensive HTTP response headers with secure defaults.
 app.use(helmet());
@@ -61,6 +69,8 @@ app.use(
     // Preflight responses advertise only the HTTP methods used by this API.
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
+    // Frontend JavaScript may read the safe correlation ID from failed responses.
+    exposedHeaders: ["X-Request-ID"],
   }),
 );
 
@@ -135,6 +145,24 @@ app.get("/db-health", async (req, res) => {
   }
 });
 
+app.get("/internal/operations", async (req, res) => {
+  /*
+   * Nginx blocks /internal/ from public traffic. Operators can request this URL
+   * only from the private Docker network, where it returns counts but no job
+   * names, object keys, cookies, passwords, or error-message contents.
+   */
+  const durable = await getDurableOperationsSnapshot();
+
+  res.json({
+    status: "ok",
+    service: "backend",
+    instanceId,
+    uptimeSeconds: Math.round(process.uptime()),
+    process: getHttpMetricsSnapshot(),
+    durable,
+  });
+});
+
 const notFoundHandler: RequestHandler = (req, res) => {
   // This runs after every known route. Reaching it means no earlier route matched
   // the request's method and URL.
@@ -147,10 +175,16 @@ const notFoundHandler: RequestHandler = (req, res) => {
 const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   // Log the detailed server-side error for diagnosis, but return a generic
   // response so stack traces, credentials, and internal paths are not exposed.
-  console.error(error);
+  logger.error("http_request_failed", {
+    error,
+    method: req.method,
+    path: req.path,
+  });
 
   res.status(500).json({
     error: "Internal server error",
+    // Users can report this value so an operator can find the matching log entry.
+    requestId: req.requestId,
   });
 };
 
@@ -166,7 +200,7 @@ const jobUpdatesService = createJobUpdatesService(server);
 
 // Begin accepting HTTP connections. The callback runs once the port is bound.
 server.listen(PORT, () => {
-  console.log(`Backend API running on port ${PORT}`);
+  logger.info("backend_started", { port: PORT });
 
   // Start the Kafka status consumer before the outbox polling loop. `void` marks
   // this Promise chain as intentionally started in the background.
@@ -176,7 +210,7 @@ server.listen(PORT, () => {
       startOutboxPublisher();
     })
     .catch((error) => {
-      console.error("Failed to start Kafka background services:", error);
+      logger.error("kafka_background_start_failed", { error });
     });
 });
 
@@ -190,12 +224,12 @@ async function shutdown(signal: string) {
   }
 
   isShuttingDown = true;
-  console.log(`Received ${signal}. Shutting down backend...`);
+  logger.info("backend_shutdown_requested", { signal });
 
   // Graceful cleanup should normally finish. This timer prevents a permanently
   // stuck dependency from leaving the container unable to terminate.
   const forceExitTimer = setTimeout(() => {
-    console.error("Graceful shutdown timed out");
+    logger.error("backend_shutdown_timed_out");
     process.exit(1);
   }, 30_000);
 
@@ -238,10 +272,10 @@ async function shutdown(signal: string) {
 
     // Successful cleanup makes the emergency timer unnecessary.
     clearTimeout(forceExitTimer);
-    console.log("Backend shutdown completed");
+    logger.info("backend_shutdown_completed");
     process.exit(0);
   } catch (error) {
-    console.error("Backend shutdown failed:", error);
+    logger.error("backend_shutdown_failed", { error });
     process.exit(1);
   }
 }

@@ -4,6 +4,7 @@ import {
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { pool } from "../db.js";
+import { logger } from "../observability/logger.js";
 import { bucketName, s3Client } from "../storage/s3.js";
 
 type ClaimedCleanupJob = {
@@ -189,10 +190,13 @@ export async function cleanupExpiredStorageBatch(
       await deleteJobObjects(job);
       await markCleanupCompleted(job);
       deleted += 1;
-      console.log(`Deleted expired storage for job ${job.id}`);
+      logger.info("expired_job_storage_deleted", { jobId: job.id });
     } catch (error) {
       failed += 1;
-      console.error(`Storage cleanup failed for job ${job.id}:`, error);
+      logger.error("expired_job_storage_delete_failed", {
+        error,
+        jobId: job.id,
+      });
       await markCleanupFailed(job, error);
     }
   }

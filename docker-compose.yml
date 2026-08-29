@@ -9,6 +9,7 @@ services:
     build:
       context: ./backend
     environment:
+      SERVICE_NAME: backend
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://minio:9000
@@ -62,6 +63,7 @@ services:
     image: ai-audio-processing-backend:local
     command: npm run cleanup
     environment:
+      SERVICE_NAME: cleanup
       DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
@@ -98,7 +100,9 @@ services:
           "--quiet",
           "--tries=1",
           "--spider",
-          "http://localhost:4000/nginx-health",
+          # Use the IPv4 loopback address explicitly. In this Alpine image,
+          # localhost may resolve to IPv6 while Nginx listens on IPv4 port 4000.
+          "http://127.0.0.1:4000/nginx-health",
         ]
       interval: 10s
       timeout: 5s
@@ -113,6 +117,7 @@ services:
     build:
       context: ./worker
     environment:
+      SERVICE_NAME: worker
       KAFKA_BROKER: kafka:29092
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
       KAFKA_JOB_STATUS_TOPIC: audio.jobs.status
