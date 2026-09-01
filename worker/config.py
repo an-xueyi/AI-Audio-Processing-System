@@ -6,6 +6,7 @@ worker/.env during manual local execution. Other modules import typed constants
 from here instead of repeatedly parsing strings and choosing their own defaults.
 """
 
+import math
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -38,6 +39,23 @@ WORK_DIR = Path(os.getenv("WORK_DIR", "/tmp/audio-processing"))
 # mock verifies infrastructure quickly; demucs performs actual model inference.
 PROCESSING_MODE = os.getenv("PROCESSING_MODE", "mock")
 DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_6s")
+
+# Mock mode previously slept for 0.5 seconds after each of seven progress
+# updates, giving a fixed total of 3.5 seconds. Keeping 3.5 as the default
+# preserves that behavior while integration tests may request a longer window
+# in which to interrupt a worker deliberately.
+MOCK_PROCESSING_DELAY_SECONDS = float(
+    os.getenv("MOCK_PROCESSING_DELAY_SECONDS", "3.5")
+)
+
+if (
+    not math.isfinite(MOCK_PROCESSING_DELAY_SECONDS)
+    or MOCK_PROCESSING_DELAY_SECONDS < 0
+):
+    # Reject negative, infinity, and NaN values before a job reaches time.sleep.
+    raise RuntimeError(
+        "MOCK_PROCESSING_DELAY_SECONDS must be a finite non-negative number"
+    )
 
 # Terminal jobs retain their private upload and result objects for this many
 # hours. The cleanup service reads the resulting database timestamp later, so

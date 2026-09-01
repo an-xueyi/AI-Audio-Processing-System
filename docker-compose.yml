@@ -125,8 +125,10 @@ services:
       KAFKA_DEAD_LETTER_TOPIC: audio.jobs.dead-letter
       MAX_PROCESSING_ATTEMPTS: 3
       RETRY_BACKOFF_SECONDS: 5
-      JOB_LEASE_TIMEOUT_SECONDS: 300
-      JOB_HEARTBEAT_INTERVAL_SECONDS: 30
+      # Defaults are production-like. Local recovery tests temporarily shorten
+      # the lease so a deliberately crashed job is reclaimed within one minute.
+      JOB_LEASE_TIMEOUT_SECONDS: ${JOB_LEASE_TIMEOUT_SECONDS:-300}
+      JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: 15
       WORKER_STALE_AFTER_SECONDS: 60
       DATABASE_URL: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
@@ -139,6 +141,7 @@ services:
       # choose mock for an inexpensive multi-worker infrastructure test.
       PROCESSING_MODE: ${PROCESSING_MODE:-demucs}
       DEMUCS_MODEL: ${DEMUCS_MODEL:-htdemucs_6s}
+      MOCK_PROCESSING_DELAY_SECONDS: ${MOCK_PROCESSING_DELAY_SECONDS:-3.5}
       RESULT_RETENTION_HOURS: ${RESULT_RETENTION_HOURS:-168}
     volumes:
       - demucs_model_cache:/root/.cache/torch

@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from config import PROCESSING_MODE, WORK_DIR
+from config import MOCK_PROCESSING_DELAY_SECONDS, PROCESSING_MODE, WORK_DIR
 from database import update_job_status
 from demucs_process import run_demucs
 from job_control import raise_if_job_cancelled
@@ -85,11 +85,18 @@ def process_audio_job(
 
     # Mock mode keeps local development fast while exercising the same status,
     # Kafka, database, and object-storage paths as Demucs mode.
-    # range produces 30, 40, ... 90 because its stop value 91 is excluded.
-    for progress in range(30, 91, 10):
+    # range produces 30, 40, ... 90 because its stop value 91 is excluded. Turn
+    # it into a list so the configured total delay can be divided evenly across
+    # every progress step without hard-coding the number seven elsewhere.
+    mock_progress_values = list(range(30, 91, 10))
+    delay_per_step = MOCK_PROCESSING_DELAY_SECONDS / len(mock_progress_values)
+
+    for progress in mock_progress_values:
         raise_if_job_cancelled(job_id)
         update_job_status(job_id, worker_id, "PROCESSING", progress)
-        # A short delay makes progress observable during local mock testing.
-        time.sleep(0.5)
+        # Zero is valid for a fast infrastructure check. Avoiding sleep entirely
+        # in that case also makes the intention clearer during tests.
+        if delay_per_step > 0:
+            time.sleep(delay_per_step)
 
     return upload_mock_results(job_id, input_path)
