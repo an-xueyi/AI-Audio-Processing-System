@@ -4,6 +4,7 @@
  * and event handlers needed to render their own sections.
  */
 import { DownloadResults } from "./components/DownloadResults";
+import { AccountPanel } from "./components/AccountPanel";
 import { Hero } from "./components/Hero";
 import { JobDetails } from "./components/JobDetails";
 import { JobHistory } from "./components/JobHistory";
@@ -15,15 +16,21 @@ function App() {
   // Destructuring gives local names to the state and actions returned by the
   // custom hook without exposing the hook's internal implementation to the UI.
   const {
+    authenticationError,
     backendHealth,
     cancelJob,
+    currentUser,
     downloadUrls,
-    isUploading,
+    isAuthenticating,
     isCancelling,
     isJobHistoryLoading,
+    isUploading,
     job,
     jobHistory,
+    login,
+    logout,
     message,
+    register,
     selectedFile,
     sessionReady,
     selectFile,
@@ -36,6 +43,17 @@ function App() {
     <main className="app-shell">
       {/* Hero contains static product identity and does not require props. */}
       <Hero />
+
+      {/* Account actions change the server-resolved owner used by later calls. */}
+      <AccountPanel
+        authenticationError={authenticationError}
+        currentUser={currentUser}
+        identityChangeDisabled={isUploading || !sessionReady}
+        isAuthenticating={isAuthenticating}
+        onLogin={login}
+        onLogout={logout}
+        onRegister={register}
+      />
 
       {/* Pass current health and message state into the status presentation. */}
       <SystemStatus backendHealth={backendHealth} message={message} />

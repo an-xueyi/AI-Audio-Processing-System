@@ -10,7 +10,9 @@ router.post("/", (req, res) => {
   // 201 means a new session resource was created. Returning 200 for an existing
   // valid cookie tells the client that its session was simply refreshed.
   res.status(session.isNew ? 201 : 200).json({
-    authenticated: true,
+    // This means anonymous browser ownership is ready. Account authentication is
+    // reported separately by GET /api/auth/me.
+    sessionReady: true,
     expiresInSeconds: sessionMaxAgeSeconds,
   });
 });

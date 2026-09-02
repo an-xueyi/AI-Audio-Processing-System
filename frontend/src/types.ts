@@ -8,6 +8,23 @@ export type HealthResponse = {
   service: string;
 };
 
+export type User = {
+  // id is the permanent backend-generated UUID used to own account jobs.
+  id: string;
+  // username is normalized to lower case by the backend during registration.
+  username: string;
+};
+
+export type AuthenticationResponse =
+  | {
+      authenticated: true;
+      user: User;
+    }
+  | {
+      authenticated: false;
+      user: null;
+    };
+
 export type PresignResponse = {
   uploadUrl: string;
   objectKey: string;

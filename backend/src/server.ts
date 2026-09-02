@@ -9,7 +9,7 @@ import { createServer } from "http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { requireSession } from "./auth/session.js";
+import { requirePrincipal } from "./auth/principal.js";
 import { isAllowedOrigin } from "./config/security.js";
 import { pool } from "./db.js";
 import { requireAllowedOrigin } from "./middleware/origin.js";
@@ -18,6 +18,7 @@ import { observeRequest } from "./middleware/requestObservability.js";
 import { logger } from "./observability/logger.js";
 import { getHttpMetricsSnapshot } from "./observability/metrics.js";
 import jobsRouter from "./routes/jobs.js";
+import authRouter from "./routes/auth.js";
 import sessionRouter from "./routes/session.js";
 import uploadsRouter from "./routes/uploads.js";
 import {
@@ -85,10 +86,12 @@ app.use("/api", requireAllowedOrigin, apiRateLimit);
 // Session creation is public because a new browser does not have a cookie yet.
 app.use("/api/session", sessionRouter);
 
-// Upload and job routes require a verified session. Upload permission has an
-// additional stricter rate limit before its route handler executes.
-app.use("/api/uploads", requireSession, uploadRateLimit, uploadsRouter);
-app.use("/api/jobs", requireSession, jobsRouter);
+// Principal resolution selects either a permanent logged-in user UUID or the
+// signed anonymous UUID. Authentication routes need both identities so login can
+// adopt anonymous work, while uploads and jobs use only the resolved ownerId.
+app.use("/api/auth", requirePrincipal, authRouter);
+app.use("/api/uploads", requirePrincipal, uploadRateLimit, uploadsRouter);
+app.use("/api/jobs", requirePrincipal, jobsRouter);
 
 // Node environment variables are strings. Keeping this value as string or
 // number is valid because server.listen accepts both forms.

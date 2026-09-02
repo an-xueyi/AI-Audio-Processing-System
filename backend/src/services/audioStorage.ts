@@ -12,7 +12,7 @@ import { bucketName, s3Client, s3PublicClient } from "../storage/s3.js";
 export class UploadValidationError extends Error {}
 
 export async function verifyOwnedAudioUpload(
-  sessionId: string,
+  ownerId: string,
   objectKey: string,
 ) {
   try {
@@ -25,7 +25,7 @@ export async function verifyOwnedAudioUpload(
       }),
     );
 
-    if (object.Metadata?.["owner-id"] !== sessionId) {
+    if (object.Metadata?.["owner-id"] !== ownerId) {
       // Optional chaining handles an object with no Metadata map.
       throw new UploadValidationError(
         "The uploaded object has invalid ownership metadata",

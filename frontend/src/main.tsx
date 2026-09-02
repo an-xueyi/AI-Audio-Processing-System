@@ -3,6 +3,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
+import './account.css'
 import App from './App.tsx'
 
 // The `!` tells TypeScript that index.html is guaranteed to contain this element.

@@ -31,3 +31,16 @@ export const uploadRateLimit = rateLimit({
     error: "Too many upload requests. Please try again later.",
   },
 });
+
+export const authenticationRateLimit = rateLimit({
+  // Password hashing intentionally uses meaningful CPU and memory. This narrow
+  // limiter prevents one address from turning unlimited guesses into resource
+  // exhaustion while leaving ordinary health and job-status requests unaffected.
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: {
+    error: "Too many authentication attempts. Please try again later.",
+  },
+});

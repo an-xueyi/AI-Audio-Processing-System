@@ -38,7 +38,7 @@ router.post("/", async (req, res) => {
   }
 
   const { originalFileName, inputObjectKey } = parsedRequest.data;
-  const requiredObjectPrefix = `uploads/${req.sessionId}/`;
+  const requiredObjectPrefix = `uploads/${req.ownerId}/`;
 
   // Do not trust an object key merely because the browser sent it. A session
   // may create jobs only from its own upload directory.
@@ -51,7 +51,7 @@ router.post("/", async (req, res) => {
   // The prefix check is followed by a storage metadata check. Together they
   // verify that the object exists, has the expected owner, type, and size.
   try {
-    await verifyOwnedAudioUpload(req.sessionId, inputObjectKey);
+    await verifyOwnedAudioUpload(req.ownerId, inputObjectKey);
   } catch (error) {
     if (error instanceof UploadValidationError) {
       return res.status(400).json({ error: error.message });
@@ -61,11 +61,7 @@ router.post("/", async (req, res) => {
   }
 
   // The service performs the database job and outbox writes transactionally.
-  const job = await createJob(
-    req.sessionId,
-    originalFileName,
-    inputObjectKey,
-  );
+  const job = await createJob(req.ownerId, originalFileName, inputObjectKey);
   logger.info("job_created", { jobId: job.id, status: job.status });
   // 201 Created is the correct success status for a new job resource.
   res.status(201).json(job);
@@ -73,11 +69,11 @@ router.post("/", async (req, res) => {
 
 router.get("/", async (req, res) => {
   /*
-   * This route is mounted after requireSession in server.ts. req.sessionId is
-   * therefore a verified signed-cookie value, not an owner ID supplied by the
-   * browser in a query string or request body.
+   * This route is mounted after requirePrincipal in server.ts. req.ownerId is
+   * therefore derived from verified cookies, not supplied by the browser in a
+   * query string or request body.
    */
-  const jobs = await findRecentOwnedJobs(req.sessionId);
+  const jobs = await findRecentOwnedJobs(req.ownerId);
 
   // Wrap the array in an object so the response can gain pagination metadata in
   // the future without changing the meaning of the existing `jobs` property.
@@ -92,8 +88,8 @@ router.post("/:id/cancel", async (req, res) => {
     return res.status(400).json({ error: "Invalid job id" });
   }
 
-  // Pass the verified session ID so cancellation cannot affect another owner.
-  const result = await cancelJob(parsedJobId.data, req.sessionId);
+  // Pass the verified owner ID so cancellation cannot affect another owner.
+  const result = await cancelJob(parsedJobId.data, req.ownerId);
 
   if (result.outcome === "not_found") {
     // The same response covers absent and differently owned jobs.
@@ -123,7 +119,7 @@ router.get("/:id/downloads", async (req, res) => {
     return res.status(400).json({ error: "Invalid job id" });
   }
 
-  const job = await findOwnedJob(parsedJobId.data, req.sessionId);
+  const job = await findOwnedJob(parsedJobId.data, req.ownerId);
 
   if (!job) {
     return res.status(404).json({ error: "Job not found" });
@@ -181,7 +177,7 @@ router.get("/:id", async (req, res) => {
     return res.status(400).json({ error: "Invalid job id" });
   }
 
-  const job = await findOwnedJob(parsedJobId.data, req.sessionId);
+  const job = await findOwnedJob(parsedJobId.data, req.ownerId);
 
   if (!job) {
     return res.status(404).json({ error: "Job not found" });

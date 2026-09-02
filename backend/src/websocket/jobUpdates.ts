@@ -2,7 +2,7 @@
 import type { Server } from "http";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
-import { readSessionId } from "../auth/session.js";
+import { resolveRequestPrincipal } from "../auth/principal.js";
 import { isAllowedOrigin } from "../config/security.js";
 import { logger } from "../observability/logger.js";
 import {
@@ -75,63 +75,82 @@ export function createJobUpdatesService(
       return;
     }
 
-    // The upgrade request includes normal HTTP cookies. Verify the same signed
-    // session used by protected Express routes.
-    const sessionId = readSessionId(request.headers.cookie);
+    /*
+     * Account sessions require a PostgreSQL lookup, so identity resolution is
+     * asynchronous. The event emitter cannot await a Promise returned by this
+     * callback; `void` starts the work and the final catch handles failures.
+     */
+    void (async () => {
+      // The upgrade request carries the same HttpOnly cookies as HTTP requests.
+      const principal = await resolveRequestPrincipal(request.headers.cookie);
 
-    if (!sessionId) {
-      logger.warn("websocket_rejected_session", { connectionId });
-      sendJson(socket, {
-        type: "error",
-        error: "A valid session is required",
-      });
-      socket.close(1008, "Authentication required");
-      return;
-    }
-
-    // Initialize all application fields before registering event handlers.
-    socket.isAlive = true;
-    socket.sessionId = sessionId;
-    socket.subscriptionVersion = 0;
-    logger.info("websocket_connected", { connectionId });
-
-    // The ws client automatically replies to a ping with pong. Receiving it proves
-    // the connection is still able to communicate in both directions.
-    socket.on("pong", () => {
-      socket.isAlive = true;
-    });
-
-    // `data` contains the message bytes and isBinary states how they were sent.
-    socket.on("message", (data, isBinary) => {
-      if (isBinary) {
+      if (!principal) {
+        logger.warn("websocket_rejected_session", { connectionId });
         sendJson(socket, {
           type: "error",
-          error: "Binary WebSocket messages are not supported",
+          error: "A valid browser session is required",
         });
+        socket.close(1008, "Authentication required");
         return;
       }
 
-      // Convert text bytes to a string and start async validation/handling. Attach
-      // catch here because an event callback cannot return an awaited Promise.
-      void handleClientMessage(socket, data.toString()).catch((error) => {
-        logger.error("websocket_message_failed", { connectionId, error });
-        sendJson(socket, {
-          type: "error",
-          error: "Failed to handle WebSocket message",
+      // Initialize all application fields before registering message handlers.
+      socket.isAlive = true;
+      socket.ownerId = principal.ownerId;
+      socket.subscriptionVersion = 0;
+      logger.info("websocket_connected", {
+        connectionId,
+        authenticated: principal.user !== null,
+      });
+
+      // The ws client automatically replies to a ping with pong. Receiving it
+      // proves the connection can still communicate in both directions.
+      socket.on("pong", () => {
+        socket.isAlive = true;
+      });
+
+      // `data` contains message bytes and isBinary records how they were sent.
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          sendJson(socket, {
+            type: "error",
+            error: "Binary WebSocket messages are not supported",
+          });
+          return;
+        }
+
+        // Convert bytes to text, then validate and process the browser command.
+        void handleClientMessage(socket, data.toString()).catch((error) => {
+          logger.error("websocket_message_failed", { connectionId, error });
+          sendJson(socket, {
+            type: "error",
+            error: "Failed to handle WebSocket message",
+          });
         });
       });
-    });
 
-    // Closing a connection must stop its safety interval and remove subscription state.
-    socket.on("close", () => {
-      clearSubscription(socket);
-    });
+      // Closing must stop its safety interval and remove subscription state.
+      socket.on("close", () => {
+        clearSubscription(socket);
+      });
 
-    // Tell the browser it may now send its subscribe command. Converting the
-    // interval to seconds gives a friendlier protocol value.
-    sendJson(socket, {
-      type: "connection_ready",
-      heartbeatIntervalSeconds: heartbeatIntervalMs / 1000,
+      // The browser waits for this message before sending a subscribe command.
+      sendJson(socket, {
+        type: "connection_ready",
+        heartbeatIntervalSeconds: heartbeatIntervalMs / 1000,
+      });
+    })().catch((error) => {
+      // Database/authentication failures close this connection without exposing
+      // token, SQL, or infrastructure details to the browser.
+      logger.error("websocket_authentication_failed", {
+        connectionId,
+        error,
+      });
+      sendJson(socket, {
+        type: "error",
+        error: "WebSocket authentication failed",
+      });
+      socket.close(1011, "Authentication unavailable");
     });
   });
 

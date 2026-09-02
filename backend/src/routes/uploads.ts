@@ -64,7 +64,7 @@ router.post("/presign", async (req, res) => {
     .replace(/[^a-zA-Z0-9._ -]/g, "-");
   // Session ownership creates a private prefix. randomUUID prevents two files
   // with the same name from overwriting one another.
-  const objectKey = `uploads/${req.sessionId}/${randomUUID()}-${safeFileName}`;
+  const objectKey = `uploads/${req.ownerId}/${randomUUID()}-${safeFileName}`;
 
   // PutObjectCommand describes the one upload operation that the signed URL is
   // allowed to perform. It does not upload any bytes from this backend.
@@ -75,7 +75,7 @@ router.post("/presign", async (req, res) => {
     ContentType: contentType,
     Metadata: {
       // The backend verifies this storage metadata before creating a job.
-      "owner-id": req.sessionId,
+      "owner-id": req.ownerId,
     },
   });
 

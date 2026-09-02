@@ -3,27 +3,23 @@
  * upload it directly, create a Kafka-backed job, receive live status, cancel
  * work, and request result links. Components consume this hook as one clear API.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   cancelProcessingJob,
-  createBrowserSession,
   createProcessingJob,
-  fetchBackendHealth,
   requestPresignedUpload,
   uploadAudioFile,
 } from "../api/audioProcessing";
-import type { HealthResponse } from "../types";
 import { getAudioContentType } from "../utils/audio";
 import { isActiveJob } from "../utils/jobs";
+import { useApplicationInitialization } from "./useApplicationInitialization";
+import { useAuthentication } from "./useAuthentication";
 import { useJobHistory } from "./useJobHistory";
 import { useSelectedJob } from "./useSelectedJob";
 
 export function useAudioProcessing() {
   // useState stores values between React renders. Each setter schedules another
   // render so the visible interface reflects the new application state.
-  const [backendHealth, setBackendHealth] = useState<HealthResponse | null>(
-    null,
-  );
   // null means the user has not selected a browser File yet.
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -33,9 +29,6 @@ export function useAudioProcessing() {
   // Boolean flags disable commands while their asynchronous operation is active.
   const [isUploading, setIsUploading] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-
-  // A file cannot be uploaded until the signed browser session has been created.
-  const [sessionReady, setSessionReady] = useState(false);
 
   const {
     isJobHistoryLoading,
@@ -49,84 +42,75 @@ export function useAudioProcessing() {
     upsertHistoryJob,
   });
 
-  useEffect(() => {
-    // An effect performs work outside rendering. In this case, the effect
-    // creates the browser session, checks the backend, and restores job history
-    // when this hook is first used. The dependency array at the bottom lists
-    // the stable callback functions that the effect uses.
-    let isActive = true;
+  const authentication = useAuthentication();
+  const { backendHealth, sessionReady } = useApplicationInitialization({
+    loadAuthentication: authentication.loadAuthentication,
+    loadJobHistory,
+    selectJob,
+    setMessage,
+  });
 
-    async function initializeApplication() {
-      try {
-        // Establish ownership first so all later protected API requests have a cookie.
-        await createBrowserSession();
+  async function reloadJobsAfterIdentityChange(successMessage: string) {
+    // A WebSocket authenticated before login still represents the former owner.
+    // Clearing selection closes it before history is loaded for the new owner.
+    clearSelectedJob();
 
-        // Then verify that the backend process is reachable.
-        const health = await fetchBackendHealth();
+    try {
+      const jobs = await loadJobHistory();
+      const activeJob = jobs.find(isActiveJob);
 
-        // The request may finish after the component is removed. isActive avoids
-        // updating state for a screen that no longer exists.
-        if (isActive) {
-          setBackendHealth(health);
-        }
-
-        try {
-          // History must be requested after createBrowserSession because the API
-          // derives ownership from the newly established cookie.
-          const recoveredJobs = await loadJobHistory();
-
-          if (!isActive) {
-            return;
-          }
-
-          // Enable uploading only after the initial history snapshot is applied,
-          // preventing it from overwriting a job created during recovery.
-          setSessionReady(true);
-
-          // The list is newest first, so find returns the newest unfinished job.
-          const recoveredActiveJob = recoveredJobs.find(isActiveJob);
-
-          if (recoveredActiveJob) {
-            // Restore detail state before subscribing. The server sends another
-            // authoritative current snapshot immediately after subscription.
-            selectJob(recoveredActiveJob);
-            setMessage(
-              `Recovered ${recoveredActiveJob.original_file_name} at ` +
-                `${recoveredActiveJob.progress}%.`,
-            );
-          } else {
-            setMessage("Backend is connected.");
-          }
-        } catch (error) {
-          // Uploading remains usable when only history loading fails.
-          if (isActive) {
-            setSessionReady(true);
-            setMessage(
-              error instanceof Error
-                ? error.message
-                : "Backend connected, but job history could not be loaded.",
-            );
-          }
-        }
-      } catch {
-        // Initialization failures intentionally share a simple user message. The
-        // browser console/network panel can provide technical request details.
-        if (isActive) {
-          setSessionReady(false);
-          setMessage("Could not connect to backend.");
-        }
+      if (activeJob) {
+        selectJob(activeJob);
+        setMessage(
+          `Recovered ${activeJob.original_file_name} at ${activeJob.progress}%.`,
+        );
+      } else {
+        setMessage(successMessage);
       }
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Account changed, but job history could not be loaded.",
+      );
+    }
+  }
+
+  async function login(username: string, password: string) {
+    const succeeded = await authentication.login(username, password);
+
+    if (succeeded) {
+      await reloadJobsAfterIdentityChange(
+        `Signed in as ${username.toLowerCase()}.`,
+      );
     }
 
-    // `void` explicitly discards the Promise because useEffect itself must not
-    // return a Promise; it may return only a synchronous cleanup function.
-    void initializeApplication();
+    return succeeded;
+  }
 
-    return () => {
-      // React calls this cleanup during unmount and StrictMode's development check.
-      isActive = false;
-    };
-  }, [loadJobHistory, selectJob]);
+  async function register(username: string, password: string) {
+    const succeeded = await authentication.register(username, password);
+
+    if (succeeded) {
+      await reloadJobsAfterIdentityChange(
+        `Account ${username.toLowerCase()} was created.`,
+      );
+    }
+
+    return succeeded;
+  }
+
+  async function logout() {
+    const succeeded = await authentication.logout();
+
+    if (succeeded) {
+      await reloadJobsAfterIdentityChange(
+        "Signed out. This browser now has a private visitor workspace.",
+      );
+    }
+
+    return succeeded;
+  }
 
   function selectFile(file: File | null) {
     // Selecting another file resets every result belonging to the previous job
@@ -222,15 +206,21 @@ export function useAudioProcessing() {
   // Expose state for rendering and named actions for user events. Internal setter
   // functions and workflow details remain private to this hook.
   return {
+    authenticationError: authentication.authenticationError,
     backendHealth,
     cancelJob,
+    currentUser: authentication.currentUser,
     downloadUrls,
-    isUploading,
+    isAuthenticating: authentication.isAuthenticating,
     isCancelling,
     isJobHistoryLoading,
+    isUploading,
     job,
     jobHistory,
+    login,
+    logout,
     message,
+    register,
     selectedFile,
     sessionReady,
     selectFile,

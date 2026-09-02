@@ -28,7 +28,8 @@ export type JobSubscription = {
 // attached after authentication.
 export type JobSocket = WebSocket & {
   isAlive: boolean;
-  sessionId: string;
+  // The same server-resolved owner used by HTTP job routes.
+  ownerId: string;
   subscriptionVersion: number;
   subscription?: JobSubscription;
 };
@@ -114,8 +115,8 @@ export async function refreshSubscription(
       // Consume the pending request now; a newly arriving event may set it again.
       subscription.refreshRequested = false;
 
-      // Ownership filtering uses the socket's verified session ID.
-      const job = await findOwnedJob(subscription.jobId, socket.sessionId);
+      // Ownership filtering uses the socket's verified user or visitor owner ID.
+      const job = await findOwnedJob(subscription.jobId, socket.ownerId);
 
       // Recheck after await because the subscription may have changed while the
       // database operation was in progress.
@@ -156,7 +157,7 @@ async function subscribeToJob(socket: JobSocket, jobId: string) {
 
   // Capture this action's version before waiting for PostgreSQL.
   const subscriptionVersion = socket.subscriptionVersion;
-  const job = await findOwnedJob(jobId, socket.sessionId);
+  const job = await findOwnedJob(jobId, socket.ownerId);
 
   // If the counter changed during await, this result belongs to an obsolete action.
   if (socket.subscriptionVersion !== subscriptionVersion) {

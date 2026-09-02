@@ -1,7 +1,7 @@
 /* Create, sign, read, and enforce the browser's stateless ownership session. */
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import { parseCookie, stringifySetCookie } from "cookie";
-import type { NextFunction, Request, Response } from "express";
+import type { Request, Response } from "express";
 import { sessionCookieSecure } from "../config/security.js";
 
 // This is the name visible in the browser's cookie storage and Cookie header.
@@ -127,27 +127,4 @@ export function establishSession(req: Request, res: Response) {
     isNew: existingSessionId === null,
     sessionId,
   };
-}
-
-export function requireSession(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  // Authentication middleware repeats verification on every protected request;
-  // it never trusts a previous request or a value supplied in JSON.
-  const sessionId = readSessionId(req.headers.cookie);
-
-  // HTTP 401 states that valid authentication credentials are required.
-  if (!sessionId) {
-    return res.status(401).json({
-      error: "A valid session is required",
-    });
-  }
-
-  // Store the verified ID on req for later ownership checks in route handlers.
-  req.sessionId = sessionId;
-
-  // Continue to the next middleware only after verification succeeds.
-  next();
 }
