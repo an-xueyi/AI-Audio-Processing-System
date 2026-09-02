@@ -1,6 +1,5 @@
 /* Register accounts, start and end login sessions, and report current identity. */
 import { Router } from "express";
-import { z } from "zod";
 import {
   createUserSession,
   findUserForLogin,
@@ -19,36 +18,12 @@ import {
 } from "../auth/authToken.js";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import { sessionMaxAgeSeconds } from "../auth/session.js";
+import { credentialsSchema } from "../auth/validation.js";
 import { authenticationRateLimit } from "../middleware/rateLimits.js";
 import { logger } from "../observability/logger.js";
+import accountRouter from "./account.js";
 
 const router = Router();
-
-// Account names are intentionally simple because they are identifiers, not
-// profile display names. Transforming to lower case makes login case-insensitive.
-const usernameSchema = z
-  .string()
-  .trim()
-  .min(3, "Username must contain at least 3 characters")
-  .max(30, "Username must contain at most 30 characters")
-  .regex(
-    /^[a-zA-Z0-9_]+$/,
-    "Username may contain only letters, numbers, and underscores",
-  )
-  .transform((username) => username.toLowerCase());
-
-// Do not trim passwords: spaces may be an intentional part of a password.
-const passwordSchema = z
-  .string()
-  .min(12, "Password must contain at least 12 characters")
-  .max(128, "Password must contain at most 128 characters");
-
-const credentialsSchema = z
-  .object({
-    username: usernameSchema,
-    password: passwordSchema,
-  })
-  .strict();
 
 function parseCredentials(body: unknown) {
   // safeParse reports expected user input errors without throwing an exception.
@@ -184,5 +159,8 @@ router.post("/logout", async (req, res) => {
   // 204 means the operation succeeded and intentionally has no JSON body.
   res.status(204).send();
 });
+
+// Account settings share the /api/auth prefix and the same principal middleware.
+router.use(accountRouter);
 
 export default router;

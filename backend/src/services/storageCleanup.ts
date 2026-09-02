@@ -136,21 +136,52 @@ async function deleteJobObjects(job: ClaimedCleanupJob): Promise<void> {
 }
 
 async function markCleanupCompleted(job: ClaimedCleanupJob): Promise<void> {
-  const result = await pool.query(
-    `UPDATE jobs
-     SET storage_deleted_at = NOW(),
-         cleanup_claim_id = NULL,
-         cleanup_claimed_at = NULL,
-         cleanup_error_message = NULL,
-         updated_at = NOW()
-     WHERE id = $1 AND cleanup_claim_id = $2`,
-    [job.id, job.cleanup_claim_id],
-  );
+  const client = await pool.connect();
 
-  // A zero-row update means the claim was replaced after timing out. The older
-  // process must not mark work belonging to the newer cleanup attempt.
-  if (result.rowCount !== 1) {
-    throw new Error(`Cleanup claim was lost for job ${job.id}`);
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query<{ owner_deleted_at: Date | null }>(
+      `UPDATE jobs
+       SET storage_deleted_at = NOW(),
+           cleanup_claim_id = NULL,
+           cleanup_claimed_at = NULL,
+           cleanup_error_message = NULL,
+           updated_at = NOW()
+       WHERE id = $1 AND cleanup_claim_id = $2
+       RETURNING owner_deleted_at`,
+      [job.id, job.cleanup_claim_id],
+    );
+
+    // A missing row means the claim was replaced after timing out. The older
+    // process must not complete work belonging to a newer cleanup attempt.
+    const completedJob = result.rows[0];
+
+    if (!completedJob) {
+      throw new Error(`Cleanup claim was lost for job ${job.id}`);
+    }
+
+    if (completedJob.owner_deleted_at) {
+      /*
+       * Use a second statement instead of trying to UPDATE and DELETE the same
+       * row through sibling CTEs. PostgreSQL does not guarantee which of two
+       * modifications to the same row in one statement will take effect.
+       */
+      await client.query(
+        `DELETE FROM jobs
+         WHERE id = $1
+           AND owner_deleted_at IS NOT NULL
+           AND storage_deleted_at IS NOT NULL`,
+        [job.id],
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

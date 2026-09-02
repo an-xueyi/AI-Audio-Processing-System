@@ -109,6 +109,136 @@
   flex: 0 0 auto;
 }
 
+.account-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.account-settings-intro {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+.account-settings-section {
+  padding: 22px 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+.account-settings-section:first-of-type {
+  border-top: 0;
+}
+
+.account-settings-section h3 {
+  margin: 0 0 14px;
+  color: #172033;
+  font-size: 18px;
+}
+
+.account-settings-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.account-settings-title-row h3 {
+  margin: 0;
+}
+
+.account-session-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-session-list li {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) repeat(3, minmax(130px, 1fr));
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid #eef2f7;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.account-session-list li:first-child {
+  border-top: 0;
+}
+
+.account-session-list strong {
+  color: #172033;
+}
+
+.account-muted {
+  margin: 0;
+  color: #64748b;
+}
+
+.settings-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.settings-form label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-form input {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px 11px;
+  color: #172033;
+}
+
+.settings-form input:focus {
+  border-color: #2563eb;
+  outline: 2px solid #bfdbfe;
+  outline-offset: 1px;
+}
+
+.account-danger h3,
+.account-danger p {
+  color: #991b1b;
+}
+
+.account-danger p {
+  margin: -4px 0 16px;
+}
+
+.delete-account-form {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.danger-button {
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: #b91c1c;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.danger-button:disabled {
+  background: #fca5a5;
+  cursor: not-allowed;
+}
+
+.account-success {
+  color: #166534;
+}
+
 @media (max-width: 760px) {
   .account-heading-row {
     flex-direction: column;
@@ -116,6 +246,15 @@
 
   .account-form {
     grid-template-columns: 1fr;
+  }
+
+  .settings-form,
+  .delete-account-form {
+    grid-template-columns: 1fr;
+  }
+
+  .account-session-list li {
+    grid-template-columns: 1fr 1fr;
   }
 
   .account-submit {
@@ -135,5 +274,20 @@
   .account-bar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .account-actions,
+  .account-settings-title-row {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-actions button {
+    width: 100%;
+  }
+
+  .account-session-list li {
+    grid-template-columns: 1fr;
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "./config/retention.js";
 import { pool } from "./db.js";
 import { logger } from "./observability/logger.js";
+import { deleteInactiveUserSessions } from "./auth/sessionManagementService.js";
 import { cleanupExpiredStorageBatch } from "./services/storageCleanup.js";
 
 let shutdownRequested = false;
@@ -48,8 +49,18 @@ async function runCleanupLoop() {
         cleanupClaimTimeoutMinutes,
       );
 
+      // Session cleanup is a small database-only companion to storage cleanup.
+      // Running it here avoids another container and shares the existing interval.
+      const deletedSessionCount = await deleteInactiveUserSessions();
+
       if (result.claimed > 0) {
         logger.info("storage_cleanup_cycle_completed", result);
+      }
+
+      if (deletedSessionCount > 0) {
+        logger.info("inactive_user_sessions_deleted", {
+          deletedSessionCount,
+        });
       }
     } catch (error) {
       // Infrastructure failure ends only this cycle. The next interval retries,

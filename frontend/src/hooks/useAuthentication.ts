@@ -6,7 +6,13 @@ import {
   logoutFromAccount,
   registerAccount,
 } from "../api/authentication";
-import type { User } from "../types";
+import {
+  changeAccountPassword,
+  deleteAccount as requestAccountDeletion,
+  fetchAccountSessions,
+  revokeOtherAccountSessions,
+} from "../api/accountManagement";
+import type { AccountSession, User } from "../types";
 
 type AuthenticationAction = (
   credentials: { username: string; password: string },
@@ -19,6 +25,11 @@ export function useAuthentication() {
     null,
   );
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [accountSessions, setAccountSessions] = useState<AccountSession[]>([]);
+  const [accountManagementError, setAccountManagementError] = useState<
+    string | null
+  >(null);
+  const [isManagingAccount, setIsManagingAccount] = useState(false);
 
   const loadAuthentication = useCallback(async () => {
     // This runs after the anonymous session cookie is established, allowing /me
@@ -35,12 +46,14 @@ export function useAuthentication() {
       password: string,
     ): Promise<boolean> => {
       setAuthenticationError(null);
+      setAccountManagementError(null);
       setIsAuthenticating(true);
 
       try {
         // Group both fields into the JSON-shaped object expected by the API layer.
         const user = await action({ username, password });
         setCurrentUser(user);
+        setAccountSessions([]);
         return true;
       } catch (error) {
         setAuthenticationError(
@@ -68,6 +81,7 @@ export function useAuthentication() {
 
   const logout = useCallback(async (): Promise<boolean> => {
     setAuthenticationError(null);
+    setAccountManagementError(null);
     setIsAuthenticating(true);
 
     try {
@@ -75,6 +89,7 @@ export function useAuthentication() {
       // The anonymous cookie remains valid, so null means visitor mode, not an
       // unusable application session.
       setCurrentUser(null);
+      setAccountSessions([]);
       return true;
     } catch (error) {
       setAuthenticationError(
@@ -86,13 +101,101 @@ export function useAuthentication() {
     }
   }, []);
 
+  const loadAccountSessions = useCallback(async (): Promise<boolean> => {
+    setAccountManagementError(null);
+    setIsManagingAccount(true);
+
+    try {
+      setAccountSessions(await fetchAccountSessions());
+      return true;
+    } catch (error) {
+      setAccountManagementError(
+        error instanceof Error ? error.message : "Could not load sessions",
+      );
+      return false;
+    } finally {
+      setIsManagingAccount(false);
+    }
+  }, []);
+
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string): Promise<boolean> => {
+      setAccountManagementError(null);
+      setIsManagingAccount(true);
+
+      try {
+        await changeAccountPassword(currentPassword, newPassword);
+        // Password changes revoke all other sessions, so replace the displayed
+        // list with the one current browser session returned by the backend.
+        setAccountSessions(await fetchAccountSessions());
+        return true;
+      } catch (error) {
+        setAccountManagementError(
+          error instanceof Error ? error.message : "Could not change password",
+        );
+        return false;
+      } finally {
+        setIsManagingAccount(false);
+      }
+    },
+    [],
+  );
+
+  const revokeOtherSessions = useCallback(async (): Promise<boolean> => {
+    setAccountManagementError(null);
+    setIsManagingAccount(true);
+
+    try {
+      const result = await revokeOtherAccountSessions();
+      setAccountSessions(result.sessions);
+      return true;
+    } catch (error) {
+      setAccountManagementError(
+        error instanceof Error
+          ? error.message
+          : "Could not sign out other browsers",
+      );
+      return false;
+    } finally {
+      setIsManagingAccount(false);
+    }
+  }, []);
+
+  const deleteAccount = useCallback(async (password: string) => {
+    setAccountManagementError(null);
+    setIsManagingAccount(true);
+
+    try {
+      await requestAccountDeletion(password);
+      // The backend leaves the anonymous ownership cookie in place, so the app
+      // can immediately continue as a visitor after the account is removed.
+      setCurrentUser(null);
+      setAccountSessions([]);
+      return true;
+    } catch (error) {
+      setAccountManagementError(
+        error instanceof Error ? error.message : "Could not delete account",
+      );
+      return false;
+    } finally {
+      setIsManagingAccount(false);
+    }
+  }, []);
+
   return {
+    accountManagementError,
+    accountSessions,
     authenticationError,
+    changePassword,
     currentUser,
+    deleteAccount,
     isAuthenticating,
+    isManagingAccount,
     loadAuthentication,
+    loadAccountSessions,
     login,
     logout,
     register,
+    revokeOtherSessions,
   };
 }

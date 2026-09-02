@@ -112,6 +112,44 @@ export function useAudioProcessing() {
     return succeeded;
   }
 
+  async function changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const succeeded = await authentication.changePassword(
+      currentPassword,
+      newPassword,
+    );
+
+    if (succeeded) {
+      setMessage("Password changed. Other browsers were signed out.");
+    }
+
+    return succeeded;
+  }
+
+  async function revokeOtherSessions() {
+    const succeeded = await authentication.revokeOtherSessions();
+
+    if (succeeded) {
+      setMessage("Other browser sessions were signed out.");
+    }
+
+    return succeeded;
+  }
+
+  async function deleteAccount(password: string) {
+    const succeeded = await authentication.deleteAccount(password);
+
+    if (succeeded) {
+      await reloadJobsAfterIdentityChange(
+        "Account deleted. This browser now has a private visitor workspace.",
+      );
+    }
+
+    return succeeded;
+  }
+
   function selectFile(file: File | null) {
     // Selecting another file resets every result belonging to the previous job
     // and closes its realtime subscription.
@@ -206,21 +244,28 @@ export function useAudioProcessing() {
   // Expose state for rendering and named actions for user events. Internal setter
   // functions and workflow details remain private to this hook.
   return {
+    accountManagementError: authentication.accountManagementError,
+    accountSessions: authentication.accountSessions,
     authenticationError: authentication.authenticationError,
     backendHealth,
     cancelJob,
+    changePassword,
     currentUser: authentication.currentUser,
+    deleteAccount,
     downloadUrls,
     isAuthenticating: authentication.isAuthenticating,
     isCancelling,
     isJobHistoryLoading,
+    isManagingAccount: authentication.isManagingAccount,
     isUploading,
     job,
     jobHistory,
     login,
+    loadAccountSessions: authentication.loadAccountSessions,
     logout,
     message,
     register,
+    revokeOtherSessions,
     selectedFile,
     sessionReady,
     selectFile,

@@ -7,27 +7,14 @@
  */
 import { fetchJob } from "../api/audioProcessing";
 import { WS_BASE_URL } from "../config";
-import type { Job, JobStatus, JobWebSocketMessage } from "../types";
-
-// Give the server ten seconds to open a WebSocket before treating the attempt as
-// stuck. Numeric separators make 10_000 easier to read; its value is 10000 ms.
-const connectionTimeoutMs = 10_000;
-
-// Poll the ordinary HTTP job endpoint every two seconds only as a backup.
-const fallbackPollingIntervalMs = 2_000;
-
-// Each failed WebSocket attempt uses the next delay. Waiting longer over time
-// avoids sending rapid connection attempts while the backend is unavailable.
-const reconnectDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000];
-
-// A terminal status means processing will never move to another active status.
-// ReadonlySet communicates that this function only checks the collection and
-// should never add or remove statuses while the application is running.
-const terminalStatuses: ReadonlySet<JobStatus> = new Set([
-  "COMPLETED",
-  "FAILED",
-  "CANCELLED",
-]);
+import type { Job } from "../types";
+import { createJobMessageHandler } from "./jobMessageHandler";
+import {
+  connectionTimeoutMs,
+  fallbackPollingIntervalMs,
+  reconnectDelaysMs,
+  terminalStatuses,
+} from "./jobSubscriptionConfig";
 
 type JobSubscriptionOptions = {
   // The backend job UUID that this connection should watch.
@@ -218,57 +205,6 @@ export function startJobSubscription({
     reconnectTimer = window.setTimeout(openSocket, delay);
   }
 
-  /** Parse one server message and perform the action named by its `type`. */
-  function handleServerMessage(event: MessageEvent<string>) {
-    // This variable will contain one shape from the JobWebSocketMessage union
-    // after the JSON text has been parsed successfully.
-    let message: JobWebSocketMessage;
-
-    try {
-      // WebSocket messages arrive as text here. JSON.parse reconstructs the
-      // JavaScript object represented by that text.
-      message = JSON.parse(event.data) as JobWebSocketMessage;
-    } catch {
-      // Invalid JSON cannot be inspected safely, so report it and stop handling
-      // only this message. The WebSocket itself can remain connected.
-      onStatusMessage("Received an invalid realtime update.");
-      return;
-    }
-
-    // connection_ready means the transport is ready, but the server does not yet
-    // know which job this browser wants. Send a small subscription command.
-    if (message.type === "connection_ready") {
-      // JSON.stringify converts the command object to WebSocket text. Optional
-      // chaining avoids an exception if the socket closed between these events.
-      socket?.send(JSON.stringify({ type: "subscribe", jobId }));
-      return;
-    }
-
-    // subscribed confirms that the backend verified ownership and registered
-    // this socket as a listener for the requested job.
-    if (message.type === "subscribed") {
-      // A successful connection resets backoff so a future outage starts again
-      // with the shortest one-second reconnection delay.
-      reconnectAttempt = 0;
-      stopFallbackPolling();
-      onStatusMessage("Connected to realtime job updates.");
-      return;
-    }
-
-    // job_update carries a complete current Job object from PostgreSQL.
-    if (message.type === "job_update") {
-      // The message handler itself is synchronous, so deliberately start the
-      // async delivery function without returning its Promise to the browser API.
-      void deliverJobUpdate(message.job);
-      return;
-    }
-
-    // Server-side validation or subscription failures arrive as error messages.
-    if (message.type === "error") {
-      onStatusMessage(message.error);
-    }
-  }
-
   /** Create one WebSocket and register all browser event handlers on it. */
   function openSocket() {
     // A delayed reconnect callback may execute after cleanup or completion. This
@@ -295,8 +231,28 @@ export function startJobSubscription({
       connectionTimer = null;
     };
 
-    // Assign the named parser above as the handler for every incoming message.
-    socket.onmessage = handleServerMessage;
+    // Build the message handler with small callbacks owned by this connection.
+    // The helper parses message JSON; these callbacks keep connection state here.
+    socket.onmessage = createJobMessageHandler({
+      sendSubscription: () => {
+        // JSON.stringify converts the command object to WebSocket text. Optional
+        // chaining avoids an exception if the socket closed between events.
+        socket?.send(JSON.stringify({ type: "subscribe", jobId }));
+      },
+      onSubscribed: () => {
+        // A successful connection resets backoff so a future outage starts again
+        // with the shortest one-second reconnection delay.
+        reconnectAttempt = 0;
+        stopFallbackPolling();
+        onStatusMessage("Connected to realtime job updates.");
+      },
+      onJobUpdate: (job) => {
+        // Start asynchronous React delivery without returning its Promise to the
+        // browser's synchronous WebSocket event system.
+        void deliverJobUpdate(job);
+      },
+      onError: onStatusMessage,
+    });
 
     // The browser's error event usually has little useful detail. Closing the
     // socket funnels recovery through the single onclose/reconnect path.

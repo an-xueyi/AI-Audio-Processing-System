@@ -1,27 +1,45 @@
 /* Present account controls while keeping password form state local to this file. */
 import { useState, type FormEvent } from "react";
-import type { User } from "../types";
+import type { AccountSession, User } from "../types";
+import { AccountSettings } from "./AccountSettings";
 
 type AccountPanelProps = {
+  accountManagementError: string | null;
+  accountSessions: AccountSession[];
   authenticationError: string | null;
   currentUser: User | null;
   identityChangeDisabled: boolean;
   isAuthenticating: boolean;
+  isManagingAccount: boolean;
+  onChangePassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<boolean>;
+  onDeleteAccount: (password: string) => Promise<boolean>;
+  onLoadSessions: () => Promise<boolean>;
   onLogin: (username: string, password: string) => Promise<boolean>;
   onLogout: () => Promise<boolean>;
   onRegister: (username: string, password: string) => Promise<boolean>;
+  onRevokeOtherSessions: () => Promise<boolean>;
 };
 
 type AccountMode = "login" | "register";
 
 export function AccountPanel({
+  accountManagementError,
+  accountSessions,
   authenticationError,
   currentUser,
   identityChangeDisabled,
   isAuthenticating,
+  isManagingAccount,
+  onChangePassword,
+  onDeleteAccount,
+  onLoadSessions,
   onLogin,
   onLogout,
   onRegister,
+  onRevokeOtherSessions,
 }: AccountPanelProps) {
   // These values exist only while this form component is mounted. They are not
   // written to localStorage, a URL, application logs, or the job database.
@@ -30,6 +48,7 @@ export function AccountPanel({
   const [password, setPassword] = useState("");
   const [confirmedPassword, setConfirmedPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   function changeMode(nextMode: AccountMode) {
     setMode(nextMode);
@@ -38,6 +57,33 @@ export function AccountPanel({
     setPassword("");
     setConfirmedPassword("");
     setFormError(null);
+  }
+
+  async function toggleSettings() {
+    const nextOpenState = !settingsOpen;
+    setSettingsOpen(nextOpenState);
+
+    if (nextOpenState) {
+      // Fetch only when the user opens settings so ordinary page loads avoid a
+      // network request for information that may never be displayed.
+      await onLoadSessions();
+    }
+  }
+
+  async function signOut() {
+    if (await onLogout()) {
+      setSettingsOpen(false);
+    }
+  }
+
+  async function deleteAccount(passwordToVerify: string) {
+    const succeeded = await onDeleteAccount(passwordToVerify);
+
+    if (succeeded) {
+      setSettingsOpen(false);
+    }
+
+    return succeeded;
   }
 
   async function submitAccountForm(event: FormEvent<HTMLFormElement>) {
@@ -69,20 +115,46 @@ export function AccountPanel({
 
   if (currentUser) {
     return (
-      <section className="account-bar" aria-label="Account">
-        <div>
-          <span className="account-label">Signed in</span>
-          <strong>{currentUser.username}</strong>
-        </div>
-        <button
-          className="secondary-button account-action"
-          type="button"
-          disabled={isAuthenticating || identityChangeDisabled}
-          onClick={() => void onLogout()}
-        >
-          {isAuthenticating ? "Signing out..." : "Sign out"}
-        </button>
-      </section>
+      <>
+        <section className="account-bar" aria-label="Account">
+          <div>
+            <span className="account-label">Signed in</span>
+            <strong>{currentUser.username}</strong>
+          </div>
+          <div className="account-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={isAuthenticating || identityChangeDisabled}
+              aria-expanded={settingsOpen}
+              onClick={() => void toggleSettings()}
+            >
+              {settingsOpen ? "Hide settings" : "Manage account"}
+            </button>
+            <button
+              className="secondary-button account-action"
+              type="button"
+              disabled={isAuthenticating || identityChangeDisabled}
+              onClick={() => void signOut()}
+            >
+              {isAuthenticating ? "Signing out..." : "Sign out"}
+            </button>
+          </div>
+        </section>
+
+        {settingsOpen && (
+          <AccountSettings
+            error={accountManagementError}
+            isBusy={isManagingAccount}
+            sessions={accountSessions}
+            username={currentUser.username}
+            onChangePassword={onChangePassword}
+            onClose={() => setSettingsOpen(false)}
+            onDeleteAccount={deleteAccount}
+            onRevokeOtherSessions={onRevokeOtherSessions}
+          />
+        )}
+      </>
     );
   }
 

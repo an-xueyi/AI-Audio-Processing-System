@@ -16,21 +16,28 @@ function App() {
   // Destructuring gives local names to the state and actions returned by the
   // custom hook without exposing the hook's internal implementation to the UI.
   const {
+    accountManagementError,
+    accountSessions,
     authenticationError,
     backendHealth,
     cancelJob,
+    changePassword,
     currentUser,
+    deleteAccount,
     downloadUrls,
     isAuthenticating,
     isCancelling,
     isJobHistoryLoading,
+    isManagingAccount,
     isUploading,
     job,
     jobHistory,
     login,
+    loadAccountSessions,
     logout,
     message,
     register,
+    revokeOtherSessions,
     selectedFile,
     sessionReady,
     selectFile,
@@ -46,13 +53,20 @@ function App() {
 
       {/* Account actions change the server-resolved owner used by later calls. */}
       <AccountPanel
+        accountManagementError={accountManagementError}
+        accountSessions={accountSessions}
         authenticationError={authenticationError}
         currentUser={currentUser}
         identityChangeDisabled={isUploading || !sessionReady}
         isAuthenticating={isAuthenticating}
+        isManagingAccount={isManagingAccount}
+        onChangePassword={changePassword}
+        onDeleteAccount={deleteAccount}
         onLogin={login}
+        onLoadSessions={loadAccountSessions}
         onLogout={logout}
         onRegister={register}
+        onRevokeOtherSessions={revokeOtherSessions}
       />
 
       {/* Pass current health and message state into the status presentation. */}

@@ -4,13 +4,16 @@ A distributed web application that separates an uploaded song into six audio ste
 
 ## Using the Application
 
-1. Select an MP3, WAV, FLAC, M4A, AAC, or OGG audio file.
-2. Choose **Upload and Create Job**.
-3. Follow the live processing status and percentage.
-4. Cancel an active job when processing is no longer needed.
-5. Download the completed vocals, drums, bass, guitar, piano, and other stems.
+1. Create an account, sign in, or continue with a private visitor session.
+2. Select an MP3, WAV, FLAC, M4A, AAC, or OGG audio file.
+3. Choose **Upload and Create Job**.
+4. Follow the live processing status and percentage.
+5. Cancel an active job when processing is no longer needed.
+6. Download the completed vocals, drums, bass, guitar, piano, and other stems.
 
-Download URLs are temporary. Uploaded files and processing jobs are isolated by a signed browser session. Private uploads and generated stems expire automatically after the configured retention period, while the job remains visible in history.
+Download URLs are temporary. Signed-in users can recover their job history from another browser, while visitors receive an isolated signed browser session. Private uploads and generated stems expire automatically after the configured retention period, while retained job history remains visible to its owner.
+
+Account settings allow a signed-in user to change the password, review active browser sessions, sign out other browsers, or permanently delete the account. Account deletion cancels active processing and schedules owned private audio and job records for removal.
 
 ## Architecture
 
@@ -47,8 +50,9 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 
 - Direct browser-to-object-storage uploads with temporary presigned URLs
 - Audio type, extension, ownership, and size validation
-- Session-based job isolation and temporary result download URLs
-- Session-owned job history with active-job recovery after a page refresh
+- Account or visitor-session job isolation and temporary result download URLs
+- Cross-browser account history and active-job recovery after a page refresh
+- Password hashing, revocable server-side sessions, and account management
 - Automatic expiration and deletion of private source audio and generated stems
 - PostgreSQL transactional outbox for reliable Kafka publishing
 - Nginx load balancing across horizontally scalable backend replicas
@@ -79,6 +83,7 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 ```text
 backend/
   sql/                 PostgreSQL schema migrations
+  src/auth/            Password, account, principal, and session security
   src/routes/          HTTP request validation and responses
   src/services/        Job transactions and object-storage operations
   src/cleanup.ts       Expired object cleanup process and graceful shutdown

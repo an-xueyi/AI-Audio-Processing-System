@@ -142,12 +142,23 @@ export async function findUserByActiveSession(
    * invalid session never reaches job or upload route code.
    */
   const result = await pool.query<AuthenticatedUser>(
-    `SELECT users.id, users.username
-     FROM user_sessions
-     JOIN users ON users.id = user_sessions.user_id
-     WHERE user_sessions.token_hash = $1
-       AND user_sessions.revoked_at IS NULL
-       AND user_sessions.expires_at > NOW()`,
+    `WITH active_session AS (
+       SELECT user_id
+       FROM user_sessions
+       WHERE token_hash = $1
+         AND revoked_at IS NULL
+         AND expires_at > NOW()
+     ), touched_session AS (
+       UPDATE user_sessions
+       SET last_seen_at = NOW()
+       WHERE token_hash = $1
+         AND last_seen_at < NOW() - INTERVAL '15 minutes'
+         AND EXISTS (SELECT 1 FROM active_session)
+       RETURNING id
+     )
+     SELECT users.id, users.username
+     FROM active_session
+     JOIN users ON users.id = active_session.user_id`,
     [tokenHash],
   );
 

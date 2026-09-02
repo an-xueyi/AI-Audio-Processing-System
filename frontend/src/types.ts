@@ -25,6 +25,24 @@ export type AuthenticationResponse =
       user: null;
     };
 
+export type AccountSession = {
+  // This UUID identifies the database session row, not its secret cookie token.
+  id: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  // The server compares token fingerprints and returns only this safe Boolean.
+  isCurrent: boolean;
+};
+
+export type AccountSessionsResponse = {
+  sessions: AccountSession[];
+};
+
+export type RevokeSessionsResponse = AccountSessionsResponse & {
+  revokedCount: number;
+};
+
 export type PresignResponse = {
   uploadUrl: string;
   objectKey: string;
