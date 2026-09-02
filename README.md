@@ -1,6 +1,8 @@
 # Distributed AI Audio Processing System
 
-A distributed web application that separates an uploaded song into six audio stems with Demucs. The system sends large audio files directly to S3-compatible object storage, processes jobs asynchronously through Kafka workers, and delivers live progress and temporary download links through WebSockets.
+A distributed web application for separating an uploaded song into vocals, drums, bass, guitar, piano, and other audio stems with Demucs. Large files travel directly from the browser to private S3-compatible object storage, while Kafka and containerized Python workers handle the machine-learning workload independently from the web application.
+
+The interface provides live processing progress, job recovery after a page refresh, cancellation controls, account-based history, and temporary download links for completed stems.
 
 ## Using the Application
 
@@ -14,6 +16,19 @@ A distributed web application that separates an uploaded song into six audio ste
 Download URLs are temporary. Signed-in users can recover their job history from another browser, while visitors receive an isolated signed browser session. Private uploads and generated stems expire automatically after the configured retention period, while retained job history remains visible to its owner.
 
 Account settings allow a signed-in user to change the password, review active browser sessions, sign out other browsers, or permanently delete the account. Account deletion cancels active processing and schedules owned private audio and job records for removal.
+
+## How Processing Works
+
+1. The browser asks the backend for a short-lived presigned upload URL.
+2. The browser uploads the audio file directly to object storage instead of sending the large file through the backend server.
+3. The backend creates a PostgreSQL job and a matching outbox event in one database transaction.
+4. The outbox publisher sends the committed job event to Kafka.
+5. An available Python worker claims the job and runs Demucs stem separation.
+6. The worker stores progress and result locations in PostgreSQL and publishes status events through Kafka.
+7. A backend replica forwards each update to the correct browser through WebSockets.
+8. After completion, the browser requests temporary signed links for downloading the separated stems.
+
+This asynchronous design keeps uploads and machine-learning processing away from ordinary API requests. The frontend can continue responding even when a worker is processing a long audio file or another worker is recovering interrupted work.
 
 ## Architecture
 
@@ -45,6 +60,17 @@ Browser
 The backend stores a job and its Kafka event in one PostgreSQL transaction. A background outbox publisher sends committed events to Kafka, preventing a successful database write from losing its processing event.
 
 Workers use leases and heartbeats so only one worker owns a job at a time. Kafka offsets are committed only after a job reaches a terminal state or is intentionally skipped. Failed jobs retry with backoff before being sent to a dead-letter topic.
+
+## Reliability and Privacy
+
+- Every job belongs to either an authenticated account or an isolated visitor session.
+- Backend job, cancellation, download, and WebSocket operations verify that ownership before returning private information.
+- Passwords are stored as salted hashes, and authentication uses revocable server-side sessions rather than browser-stored account credentials.
+- Presigned upload and download URLs expire automatically and grant access only to a specific object operation.
+- The transactional outbox keeps a committed database job from losing its Kafka processing event.
+- Worker leases, heartbeats, idempotent claims, and retry backoff support recovery from interrupted processing.
+- Original uploads and generated stems are deleted after their retention deadline or when their owner deletes the account.
+- Secrets and service credentials are supplied through ignored environment files and are not stored in the repository.
 
 ## Current Features
 
