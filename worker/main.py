@@ -10,6 +10,7 @@ from config import (
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
     WORKER_ID,
+    validate_runtime_configuration,
 )
 from job_handler import handle_job
 from kafka_partitions import (
@@ -70,6 +71,11 @@ def create_consumer() -> Consumer:
 
 
 def main() -> None:
+    # Validate all external-service settings before joining the Kafka group. A
+    # misconfigured worker therefore becomes visibly unhealthy without claiming
+    # a job that it cannot download, update, or finish.
+    validate_runtime_configuration()
+
     # Docker sends SIGTERM during `docker compose stop`; Ctrl+C sends SIGINT.
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)

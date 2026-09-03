@@ -1,30 +1,45 @@
 /* Configure the two S3-compatible clients used inside and outside Docker. */
 import { S3Client } from "@aws-sdk/client-s3";
 import dotenv from "dotenv";
+import {
+  isLoopbackHostname,
+  isProductionEnvironment,
+  parseHttpUrl,
+  requireEnvironmentVariable,
+} from "../config/environment.js";
 
 dotenv.config();
 
-function requireEnv(name: string): string {
-  // Bracket notation reads the environment variable whose name was passed in.
-  const value = process.env[name];
-  if (!value) {
-    // Failing during startup is safer than creating a partly configured client.
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
+export const bucketName = requireEnvironmentVariable("S3_BUCKET");
 
-export const bucketName = requireEnv("S3_BUCKET");
-
-const region = requireEnv("S3_REGION");
+const region = requireEnvironmentVariable("S3_REGION");
 const credentials = {
-  accessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
-  secretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
+  accessKeyId: requireEnvironmentVariable("S3_ACCESS_KEY_ID"),
+  secretAccessKey: requireEnvironmentVariable("S3_SECRET_ACCESS_KEY"),
 };
-const internalEndpoint = requireEnv("S3_ENDPOINT");
+const internalEndpoint = requireEnvironmentVariable("S3_ENDPOINT");
+parseHttpUrl("S3_ENDPOINT", internalEndpoint);
 // Containers use the Docker service name (for example http://minio:9000), but a
 // browser on the Mac needs a host-reachable address such as localhost:9000.
-const publicEndpoint = process.env.S3_PUBLIC_ENDPOINT || internalEndpoint;
+const configuredPublicEndpoint = process.env.S3_PUBLIC_ENDPOINT?.trim();
+
+if (isProductionEnvironment && !configuredPublicEndpoint) {
+  throw new Error("S3_PUBLIC_ENDPOINT is required in production");
+}
+
+const publicEndpoint = configuredPublicEndpoint || internalEndpoint;
+const parsedPublicEndpoint = parseHttpUrl("S3_PUBLIC_ENDPOINT", publicEndpoint);
+
+if (isProductionEnvironment && parsedPublicEndpoint.protocol !== "https:") {
+  throw new Error("S3_PUBLIC_ENDPOINT must use HTTPS in production");
+}
+
+if (
+  isProductionEnvironment &&
+  isLoopbackHostname(parsedPublicEndpoint.hostname)
+) {
+  throw new Error("S3_PUBLIC_ENDPOINT cannot use localhost in production");
+}
 
 function createS3Client(endpoint: string) {
   return new S3Client({

@@ -9,10 +9,18 @@ from here instead of repeatedly parsing strings and choosing their own defaults.
 import math
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # dotenv does not overwrite values already supplied by Docker or the shell.
 load_dotenv()
+
+# APP_ENV changes validation policy without changing Python package behavior.
+# Docker Compose uses development locally; a public deployment uses production.
+APP_ENV = os.getenv("APP_ENV", "development").strip()
+
+if APP_ENV not in {"development", "test", "production"}:
+    raise RuntimeError("APP_ENV must be development, test, or production")
 
 # os.getenv returns the environment value or the second argument when absent.
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
@@ -121,3 +129,48 @@ if WORKER_HEARTBEAT_INTERVAL_SECONDS >= WORKER_STALE_AFTER_SECONDS:
         "WORKER_HEARTBEAT_INTERVAL_SECONDS must be less than "
         "WORKER_STALE_AFTER_SECONDS"
     )
+
+
+def validate_runtime_configuration() -> None:
+    """Reject incomplete worker configuration before consuming a Kafka job."""
+    # These values are required in every environment. Checking them together at
+    # startup produces an immediate, specific error instead of allowing the
+    # worker to wait for a job and fail much later during database or S3 access.
+    required_values = {
+        "DATABASE_URL": DATABASE_URL,
+        "S3_ENDPOINT": S3_ENDPOINT,
+        "S3_REGION": S3_REGION,
+        "S3_ACCESS_KEY_ID": S3_ACCESS_KEY_ID,
+        "S3_SECRET_ACCESS_KEY": S3_SECRET_ACCESS_KEY,
+        "S3_BUCKET": S3_BUCKET,
+        "KAFKA_BROKER": KAFKA_BROKER,
+        "KAFKA_JOB_CREATED_TOPIC": JOB_CREATED_TOPIC,
+        "KAFKA_JOB_STATUS_TOPIC": JOB_STATUS_TOPIC,
+        "KAFKA_CONSUMER_GROUP": KAFKA_CONSUMER_GROUP,
+        "KAFKA_DEAD_LETTER_TOPIC": DEAD_LETTER_TOPIC,
+    }
+
+    missing_names = [
+        name
+        for name, value in required_values.items()
+        if value is None or not str(value).strip()
+    ]
+
+    if missing_names:
+        # Sorting makes the error deterministic and easier to compare in logs.
+        raise RuntimeError(
+            "Missing required environment variables: "
+            + ", ".join(sorted(missing_names))
+        )
+
+    if PROCESSING_MODE not in {"mock", "demucs"}:
+        raise RuntimeError("PROCESSING_MODE must be mock or demucs")
+
+    # urlparse identifies the scheme without making a network request. Both HTTP
+    # and HTTPS are allowed because private Docker-to-MinIO traffic uses HTTP.
+    parsed_storage_endpoint = urlparse(str(S3_ENDPOINT))
+    if (
+        parsed_storage_endpoint.scheme not in {"http", "https"}
+        or not parsed_storage_endpoint.netloc
+    ):
+        raise RuntimeError("S3_ENDPOINT must be an absolute HTTP or HTTPS URL")

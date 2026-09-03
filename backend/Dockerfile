@@ -29,4 +29,8 @@ COPY --from=build /app/dist ./dist
 
 EXPOSE 4000
 
+# The official Node image includes this unprivileged account. The API does not
+# need permission to modify the container operating system or application files.
+USER node
+
 CMD ["npm", "start"]

@@ -10,6 +10,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { requirePrincipal } from "./auth/principal.js";
+import { isProductionEnvironment } from "./config/environment.js";
 import { isAllowedOrigin } from "./config/security.js";
 import { pool } from "./db.js";
 import { requireAllowedOrigin } from "./middleware/origin.js";
@@ -132,21 +133,24 @@ app.get("/ready", async (req, res) => {
   }
 });
 
-app.get("/db-health", async (req, res) => {
-  try {
-    // NOW() returns the database server's current time and demonstrates that the
-    // response contains a real query result rather than a fixed health message.
-    const result = await pool.query("SELECT NOW()");
-    res.json({
-      database: "connected",
-      time: result.rows[0].now,
-    });
-  } catch (error) {
-    res.status(500).json({
-      database: "disconnected",
-    });
-  }
-});
+// This development-only diagnostic returns the database clock for hands-on
+// connection testing. Production already has /ready and does not expose the
+// extra database-specific route publicly.
+if (!isProductionEnvironment) {
+  app.get("/db-health", async (req, res) => {
+    try {
+      const result = await pool.query("SELECT NOW()");
+      res.json({
+        database: "connected",
+        time: result.rows[0].now,
+      });
+    } catch (error) {
+      res.status(500).json({
+        database: "disconnected",
+      });
+    }
+  });
+}
 
 app.get("/internal/operations", async (req, res) => {
   /*
