@@ -20,6 +20,12 @@ It does not select a host, create cloud resources, or contain real credentials.
 - Backend containers run as the unprivileged `node` user.
 - Workers validate database, Kafka, storage, and processing-mode configuration
   before joining a Kafka consumer group.
+- Backend and worker Kafka clients support multiple brokers, TLS, and
+  PLAIN/SCRAM authentication. Production refuses an unencrypted Kafka protocol.
+- Production PostgreSQL URLs require an encrypted `sslmode`, and a production
+  hybrid worker requires an HTTPS object-storage endpoint.
+- The public availability endpoint exposes only aggregate worker capacity. It
+  does not reveal worker IDs, hostnames, current job IDs, or credentials.
 - PostgreSQL, Kafka, MinIO, and backend replicas are not directly published to
   external host interfaces by the local Compose configuration.
 - Application errors return a request ID without returning stack traces.
@@ -46,6 +52,8 @@ APP_ENV=production
 COOKIE_SECURE=true
 CORS_ALLOWED_ORIGINS=https://the-public-application-origin
 S3_PUBLIC_ENDPOINT=https://the-browser-reachable-storage-origin
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+KAFKA_SECURITY_PROTOCOL=SASL_SSL
 ```
 
 All database passwords, storage credentials, and session secrets must remain in

@@ -1,0 +1,19 @@
+# Combine this file with docker-compose.yml when web services should run without
+# a worker container. The omitted profile name is deliberate: Compose skips the
+# worker unless `--profile container-worker` is explicitly supplied.
+services:
+  worker:
+    profiles:
+      - container-worker
+
+  postgres:
+    ports:
+      # 127.0.0.1 exposes PostgreSQL only to this Mac, allowing worker/.env to
+      # use localhost:5432 without opening the database to the local network.
+      - "127.0.0.1:5432:5432"
+
+  kafka:
+    ports:
+      # Kafka already advertises localhost:9092 for host clients. This mapping
+      # makes that listener reachable by the Python process outside Docker.
+      - "127.0.0.1:9092:9092"

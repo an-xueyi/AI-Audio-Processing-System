@@ -17,10 +17,11 @@ import { requireAllowedOrigin } from "./middleware/origin.js";
 import { apiRateLimit, uploadRateLimit } from "./middleware/rateLimits.js";
 import { observeRequest } from "./middleware/requestObservability.js";
 import { logger } from "./observability/logger.js";
-import { getHttpMetricsSnapshot } from "./observability/metrics.js";
 import jobsRouter from "./routes/jobs.js";
 import authRouter from "./routes/auth.js";
+import { createOperationsRouter } from "./routes/operations.js";
 import sessionRouter from "./routes/session.js";
+import systemRouter from "./routes/system.js";
 import uploadsRouter from "./routes/uploads.js";
 import {
   startOutboxPublisher,
@@ -32,7 +33,6 @@ import {
   stopJobStatusConsumer,
 } from "./kafka/jobStatusConsumer.js";
 import { createJobUpdatesService } from "./websocket/jobUpdates.js";
-import { getDurableOperationsSnapshot } from "./services/operationsService.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 
 // Express stores the middleware and route pipeline in this application object.
@@ -86,6 +86,11 @@ app.use("/api", requireAllowedOrigin, apiRateLimit);
 
 // Session creation is public because a new browser does not have a cookie yet.
 app.use("/api/session", sessionRouter);
+
+// Processing availability is intentionally readable before authentication. It
+// contains aggregate counts only and lets every visitor know whether an online
+// or local hybrid worker can currently accept queued jobs.
+app.use("/api/system", systemRouter);
 
 // Principal resolution selects either a permanent logged-in user UUID or the
 // signed anonymous UUID. Authentication routes need both identities so login can
@@ -152,23 +157,9 @@ if (!isProductionEnvironment) {
   });
 }
 
-app.get("/internal/operations", async (req, res) => {
-  /*
-   * Nginx blocks /internal/ from public traffic. Operators can request this URL
-   * only from the private Docker network, where it returns counts but no job
-   * names, object keys, cookies, passwords, or error-message contents.
-   */
-  const durable = await getDurableOperationsSnapshot();
-
-  res.json({
-    status: "ok",
-    service: "backend",
-    instanceId,
-    uptimeSeconds: Math.round(process.uptime()),
-    process: getHttpMetricsSnapshot(),
-    durable,
-  });
-});
+// Keep operator-only diagnostics in a dedicated route module. Nginx blocks the
+// complete /internal/ prefix before public traffic can reach Express.
+app.use("/internal", createOperationsRouter(instanceId));
 
 const notFoundHandler: RequestHandler = (req, res) => {
   // This runs after every known route. Reaching it means no earlier route matched

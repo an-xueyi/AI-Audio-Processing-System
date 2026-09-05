@@ -2,10 +2,9 @@
 import { Kafka } from "kafkajs";
 import { z } from "zod";
 import { logger } from "../observability/logger.js";
+import { createKafkaClientConfiguration } from "./clientConfiguration.js";
 import { jobStatusTopic } from "./topics.js";
 
-// Docker supplies kafka:29092; manual development falls back to localhost:9092.
-const kafkaBroker = process.env.KAFKA_BROKER || "localhost:9092";
 const groupPrefix =
   process.env.KAFKA_STATUS_CONSUMER_GROUP_PREFIX || "audio-backend-status";
 // HOSTNAME differs for every Docker replica and the process ID distinguishes
@@ -20,11 +19,9 @@ const statusEventSchema = z
   })
   .strict();
 
-const kafka = new Kafka({
-  // clientId appears in Kafka logs and metrics to identify this application.
-  clientId: `audio-backend-status-${instanceId}`,
-  brokers: [kafkaBroker],
-});
+const kafka = new Kafka(
+  createKafkaClientConfiguration(`audio-backend-status-${instanceId}`),
+);
 
 /*
  * Kafka normally gives each message to only one consumer inside a consumer

@@ -7,9 +7,9 @@ from confluent_kafka import Consumer, KafkaException
 
 from config import (
     JOB_CREATED_TOPIC,
-    KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
     WORKER_ID,
+    build_kafka_client_configuration,
     validate_runtime_configuration,
 )
 from job_handler import handle_job
@@ -52,9 +52,11 @@ def create_consumer() -> Consumer:
     to only one worker in that group. This distributes jobs across replicas
     instead of asking every replica to process the same uploaded audio file.
     """
-    return Consumer(
+    # Start with the shared broker security settings used by the dead-letter
+    # producer, then add options that apply only to this consuming client.
+    consumer_configuration = build_kafka_client_configuration()
+    consumer_configuration.update(
         {
-            "bootstrap.servers": KAFKA_BROKER,
             "group.id": KAFKA_CONSUMER_GROUP,
             "auto.offset.reset": "earliest",
             # Kafka offsets are saved manually after handle_job returns. If this
@@ -68,6 +70,7 @@ def create_consumer() -> Consumer:
             "max.poll.interval.ms": 60 * 60 * 1000,
         }
     )
+    return Consumer(consumer_configuration)
 
 
 def main() -> None:

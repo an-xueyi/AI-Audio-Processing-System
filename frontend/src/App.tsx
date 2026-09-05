@@ -43,6 +43,7 @@ function App() {
     selectFile,
     selectHistoryJob,
     startProcessing,
+    workerAvailability,
   } = useAudioProcessing();
 
   // main is the semantic container for the page's primary application content.
@@ -70,7 +71,11 @@ function App() {
       />
 
       {/* Pass current health and message state into the status presentation. */}
-      <SystemStatus backendHealth={backendHealth} message={message} />
+      <SystemStatus
+        backendHealth={backendHealth}
+        message={message}
+        workerAvailability={workerAvailability}
+      />
 
       {/* UploadPanel receives data to display plus callbacks for user actions. */}
       <UploadPanel

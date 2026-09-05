@@ -1,17 +1,10 @@
 /* Manage the backend's shared Kafka producer and its connection lifecycle. */
-import dotenv from "dotenv";
 import { Kafka } from "kafkajs";
+import { createKafkaClientConfiguration } from "./clientConfiguration.js";
 
-dotenv.config();
-
-const kafkaBroker = process.env.KAFKA_BROKER || "localhost:9092";
-
-const kafka = new Kafka({
-  // clientId helps identify this producer in Kafka broker logs.
-  clientId: "audio-backend",
-  // KafkaJS accepts an array so production can list multiple bootstrap brokers.
-  brokers: [kafkaBroker],
-});
+// Both the outbox producer and status consumer now share the same broker, TLS,
+// and SASL rules instead of interpreting environment variables independently.
+const kafka = new Kafka(createKafkaClientConfiguration("audio-backend"));
 
 // Create one reusable producer object; the function below connects it lazily.
 export const producer = kafka.producer();

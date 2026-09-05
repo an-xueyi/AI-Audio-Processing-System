@@ -8,6 +8,15 @@ export type HealthResponse = {
   service: string;
 };
 
+export type WorkerAvailability = {
+  // available means at least one worker is idle, busy means every online worker
+  // has a job, and offline means no recent worker heartbeat exists.
+  status: "available" | "busy" | "offline";
+  onlineWorkers: number;
+  idleWorkers: number;
+  busyWorkers: number;
+};
+
 export type User = {
   // id is the permanent backend-generated UUID used to own account jobs.
   id: string;

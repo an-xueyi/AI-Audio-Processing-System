@@ -97,6 +97,38 @@ h2 {
   color: #991b1b;
 }
 
+/* Busy is healthy but has no immediate capacity, so amber avoids implying an error. */
+.status-pill.busy {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* Unknown means the browser has no current answer, not that a service failed. */
+.status-pill.unknown {
+  background: #e5e7eb;
+  color: #475569;
+}
+
+.system-status-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.system-status-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.system-status-row p {
+  margin: 5px 0 0;
+  color: #526179;
+}
+
 /* Expired is a storage state, so neutral gray distinguishes it from failure. */
 .status-pill.expired {
   background: #e5e7eb;
@@ -260,6 +292,10 @@ h2 {
 
   .section-header {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .system-status-row {
     flex-direction: column;
   }
 

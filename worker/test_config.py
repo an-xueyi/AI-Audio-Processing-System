@@ -27,6 +27,79 @@ class WorkerConfigurationTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "absolute HTTP"):
                 config.validate_runtime_configuration()
 
+    def test_production_kafka_rejects_plaintext(self):
+        """Remote job events must not travel over an unencrypted connection."""
+        with patch.multiple(
+            config,
+            APP_ENV="production",
+            KAFKA_SECURITY_PROTOCOL="PLAINTEXT",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "must use SSL"):
+                config.build_kafka_client_configuration()
+
+    def test_sasl_ssl_builds_authenticated_kafka_settings(self):
+        """The consumer and producer need the same hosted-broker credentials."""
+        with patch.multiple(
+            config,
+            APP_ENV="production",
+            KAFKA_BROKERS="one.example.com:9092,two.example.com:9092",
+            KAFKA_SECURITY_PROTOCOL="SASL_SSL",
+            KAFKA_SASL_MECHANISM="SCRAM-SHA-256",
+            KAFKA_SASL_USERNAME="worker-user",
+            KAFKA_SASL_PASSWORD="private-password",
+            KAFKA_SSL_CA_PATH=None,
+        ):
+            kafka_configuration = config.build_kafka_client_configuration()
+
+        self.assertEqual(
+            kafka_configuration,
+            {
+                "bootstrap.servers": (
+                    "one.example.com:9092,two.example.com:9092"
+                ),
+                "security.protocol": "SASL_SSL",
+                "sasl.mechanism": "SCRAM-SHA-256",
+                "sasl.username": "worker-user",
+                "sasl.password": "private-password",
+            },
+        )
+
+    def test_production_service_urls_require_encryption(self):
+        """Database metadata and private audio must be encrypted in transit."""
+        with patch.multiple(
+            config,
+            APP_ENV="production",
+            DATABASE_URL="postgresql://user:password@db.example.com/audio",
+            S3_ENDPOINT="https://storage.example.com",
+            S3_REGION="us-east-1",
+            S3_ACCESS_KEY_ID="private-key",
+            S3_SECRET_ACCESS_KEY="private-secret",
+            S3_BUCKET="private-audio",
+            KAFKA_BROKERS="broker.example.com:9092",
+            KAFKA_SECURITY_PROTOCOL="SSL",
+            KAFKA_SSL_CA_PATH=None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "sslmode=require"):
+                config.validate_runtime_configuration()
+
+        with patch.multiple(
+            config,
+            APP_ENV="production",
+            DATABASE_URL=(
+                "postgresql://user:password@db.example.com/audio?sslmode=require"
+            ),
+            S3_ENDPOINT="http://storage.example.com",
+            S3_REGION="us-east-1",
+            S3_ACCESS_KEY_ID="private-key",
+            S3_SECRET_ACCESS_KEY="private-secret",
+            S3_BUCKET="private-audio",
+            KAFKA_BROKERS="broker.example.com:9092",
+            KAFKA_SECURITY_PROTOCOL="SSL",
+            KAFKA_SSL_CA_PATH=None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "use HTTPS"):
+                config.validate_runtime_configuration()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Producer
 
-from config import DEAD_LETTER_TOPIC, KAFKA_BROKER
+from config import DEAD_LETTER_TOPIC, build_kafka_client_configuration
 
-producer = Producer({"bootstrap.servers": KAFKA_BROKER})
+# The producer uses the same encrypted connection and SASL credentials as the
+# consumer. Secrets remain in process memory and are never placed in the event.
+producer = Producer(build_kafka_client_configuration())
 
 
 def publish_dead_letter(job: dict, error_message: str, attempts: int) -> None:

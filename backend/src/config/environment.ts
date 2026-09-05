@@ -87,6 +87,52 @@ export function parseHttpUrl(name: string, value: string): URL {
   return parsedUrl;
 }
 
+/** Validate a PostgreSQL URL and require encrypted transport in production. */
+export function validateDatabaseUrl(
+  name: string,
+  value: string,
+  environment: ApplicationEnvironment,
+): URL {
+  let parsedUrl: URL;
+
+  try {
+    // URL separates the protocol, hostname, credentials, and query parameters.
+    // Parsing does not open a database connection or send the password anywhere.
+    parsedUrl = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid PostgreSQL connection URL`);
+  }
+
+  // PostgreSQL tools commonly accept either spelling in a connection string.
+  if (
+    parsedUrl.protocol !== "postgres:" &&
+    parsedUrl.protocol !== "postgresql:"
+  ) {
+    throw new Error(`${name} must use postgres or postgresql`);
+  }
+
+  if (!parsedUrl.hostname) {
+    throw new Error(`${name} must include a database hostname`);
+  }
+
+  if (environment === "production") {
+    // sslmode is part of the URL query string, for example:
+    // postgresql://user:password@host/database?sslmode=require
+    const sslMode = parsedUrl.searchParams.get("sslmode")?.toLowerCase();
+    const encryptedModes = new Set(["require", "verify-ca", "verify-full"]);
+
+    // Refuse production startup when credentials and audio metadata would cross
+    // the network without PostgreSQL TLS encryption.
+    if (!sslMode || !encryptedModes.has(sslMode)) {
+      throw new Error(
+        `${name} must use sslmode=require, verify-ca, or verify-full in production`,
+      );
+    }
+  }
+
+  return parsedUrl;
+}
+
 /** Identify addresses that refer back to the machine running the browser. */
 export function isLoopbackHostname(hostname: string): boolean {
   return (

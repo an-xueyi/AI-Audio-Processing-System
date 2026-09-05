@@ -16,6 +16,7 @@ import { useApplicationInitialization } from "./useApplicationInitialization";
 import { useAuthentication } from "./useAuthentication";
 import { useJobHistory } from "./useJobHistory";
 import { useSelectedJob } from "./useSelectedJob";
+import { useWorkerAvailability } from "./useWorkerAvailability";
 
 export function useAudioProcessing() {
   // useState stores values between React renders. Each setter schedules another
@@ -49,6 +50,9 @@ export function useAudioProcessing() {
     selectJob,
     setMessage,
   });
+  // Worker availability is independent of the selected job. Polling continues
+  // while the page is open so a local hybrid worker can appear or disappear.
+  const workerAvailability = useWorkerAvailability(backendHealth !== null);
 
   async function reloadJobsAfterIdentityChange(successMessage: string) {
     // A WebSocket authenticated before login still represents the former owner.
@@ -271,5 +275,6 @@ export function useAudioProcessing() {
     selectFile,
     selectHistoryJob: selectJob,
     startProcessing,
+    workerAvailability,
   };
 }

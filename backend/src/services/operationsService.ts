@@ -20,6 +20,41 @@ type WorkerRow = {
   recently_stale_workers: string;
 };
 
+export type WorkerAvailability = {
+  status: "available" | "busy" | "offline";
+  onlineWorkers: number;
+  idleWorkers: number;
+  busyWorkers: number;
+};
+
+// Keep the heartbeat rules in one SQL fragment. A worker is online only while
+// its most recent heartbeat is newer than its own configured timeout.
+const workerAggregateQuery = `SELECT
+  COUNT(*) FILTER (
+    WHERE last_heartbeat_at >= NOW() - (
+      heartbeat_timeout_seconds * INTERVAL '1 second'
+    )
+  )::text AS active_workers,
+  COUNT(*) FILTER (
+    WHERE status = 'IDLE'
+      AND last_heartbeat_at >= NOW() - (
+        heartbeat_timeout_seconds * INTERVAL '1 second'
+      )
+  )::text AS idle_workers,
+  COUNT(*) FILTER (
+    WHERE status = 'BUSY'
+      AND last_heartbeat_at >= NOW() - (
+        heartbeat_timeout_seconds * INTERVAL '1 second'
+      )
+  )::text AS busy_workers,
+  COUNT(*) FILTER (
+    WHERE last_heartbeat_at < NOW() - (
+      heartbeat_timeout_seconds * INTERVAL '1 second'
+    )
+      AND last_heartbeat_at >= NOW() - INTERVAL '24 hours'
+  )::text AS recently_stale_workers
+FROM worker_instances`;
+
 export function parseWorkerCounts(row: WorkerRow) {
   // PostgreSQL aggregate counts arrive as text. Convert them in one small pure
   // function so both the response and automated tests use identical rules.
@@ -29,6 +64,42 @@ export function parseWorkerCounts(row: WorkerRow) {
     busy: Number(row.busy_workers),
     recentlyStale: Number(row.recently_stale_workers),
   };
+}
+
+/** Describe processing capacity without exposing worker or job identifiers. */
+export function describeWorkerAvailability(
+  row: WorkerRow,
+): WorkerAvailability {
+  const counts = parseWorkerCounts(row);
+
+  if (counts.active === 0) {
+    return {
+      status: "offline",
+      onlineWorkers: 0,
+      idleWorkers: 0,
+      busyWorkers: 0,
+    };
+  }
+
+  return {
+    // An online worker with no idle capacity is busy, not disconnected.
+    status: counts.idle > 0 ? "available" : "busy",
+    onlineWorkers: counts.active,
+    idleWorkers: counts.idle,
+    busyWorkers: counts.busy,
+  };
+}
+
+/** Read the small worker-capacity view that is safe for the public frontend. */
+export async function getWorkerAvailability(): Promise<WorkerAvailability> {
+  const result = await pool.query<WorkerRow>(workerAggregateQuery);
+  const row = result.rows[0];
+
+  if (!row) {
+    throw new Error("PostgreSQL did not return the worker aggregate");
+  }
+
+  return describeWorkerAvailability(row);
 }
 
 export async function getDurableOperationsSnapshot() {
@@ -62,33 +133,7 @@ export async function getDurableOperationsSnapshot() {
          ) AS cleanup_failures_waiting
        FROM outbox_events`,
     ),
-    pool.query<WorkerRow>(
-      `SELECT
-         COUNT(*) FILTER (
-           WHERE last_heartbeat_at >= NOW() - (
-             heartbeat_timeout_seconds * INTERVAL '1 second'
-           )
-         )::text AS active_workers,
-         COUNT(*) FILTER (
-           WHERE status = 'IDLE'
-             AND last_heartbeat_at >= NOW() - (
-               heartbeat_timeout_seconds * INTERVAL '1 second'
-             )
-         )::text AS idle_workers,
-         COUNT(*) FILTER (
-           WHERE status = 'BUSY'
-             AND last_heartbeat_at >= NOW() - (
-               heartbeat_timeout_seconds * INTERVAL '1 second'
-             )
-         )::text AS busy_workers,
-         COUNT(*) FILTER (
-           WHERE last_heartbeat_at < NOW() - (
-             heartbeat_timeout_seconds * INTERVAL '1 second'
-           )
-             AND last_heartbeat_at >= NOW() - INTERVAL '24 hours'
-         )::text AS recently_stale_workers
-       FROM worker_instances`,
-    ),
+    pool.query<WorkerRow>(workerAggregateQuery),
   ]);
 
   const jobCounts: Record<string, number> = {};

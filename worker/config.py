@@ -9,7 +9,7 @@ from here instead of repeatedly parsing strings and choosing their own defaults.
 import math
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
 
 # dotenv does not overwrite values already supplied by Docker or the shell.
@@ -22,8 +22,24 @@ APP_ENV = os.getenv("APP_ENV", "development").strip()
 if APP_ENV not in {"development", "test", "production"}:
     raise RuntimeError("APP_ENV must be development, test, or production")
 
-# os.getenv returns the environment value or the second argument when absent.
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+# Managed Kafka services commonly provide more than one bootstrap broker. The
+# plural variable accepts a comma-separated list, while the singular fallback
+# keeps existing local worker/.env files working during this transition.
+KAFKA_BROKERS = os.getenv(
+    "KAFKA_BROKERS",
+    os.getenv("KAFKA_BROKER", "localhost:9092"),
+)
+
+# PLAINTEXT is appropriate only for local Kafka. A remote production worker will
+# normally use SASL_SSL so both its credentials and job events are encrypted.
+KAFKA_SECURITY_PROTOCOL = os.getenv(
+    "KAFKA_SECURITY_PROTOCOL",
+    "PLAINTEXT",
+).strip().upper()
+KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM")
+KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME")
+KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD")
+KAFKA_SSL_CA_PATH = os.getenv("KAFKA_SSL_CA_PATH")
 
 # Topic constants keep producers and consumers on matching Kafka channels.
 JOB_CREATED_TOPIC = os.getenv("KAFKA_JOB_CREATED_TOPIC", "audio.jobs.created")
@@ -131,6 +147,74 @@ if WORKER_HEARTBEAT_INTERVAL_SECONDS >= WORKER_STALE_AFTER_SECONDS:
     )
 
 
+def build_kafka_client_configuration() -> dict[str, object]:
+    """Build settings shared by the worker's Kafka consumer and producer."""
+    supported_protocols = {
+        "PLAINTEXT",
+        "SSL",
+        "SASL_PLAINTEXT",
+        "SASL_SSL",
+    }
+
+    if KAFKA_SECURITY_PROTOCOL not in supported_protocols:
+        raise RuntimeError(
+            "KAFKA_SECURITY_PROTOCOL must be PLAINTEXT, SSL, "
+            "SASL_PLAINTEXT, or SASL_SSL"
+        )
+
+    uses_tls = KAFKA_SECURITY_PROTOCOL in {"SSL", "SASL_SSL"}
+    uses_sasl = KAFKA_SECURITY_PROTOCOL in {"SASL_PLAINTEXT", "SASL_SSL"}
+
+    # Authentication does not encrypt SASL_PLAINTEXT. A production worker may
+    # cross the public internet, so TLS is mandatory in that environment.
+    if APP_ENV == "production" and not uses_tls:
+        raise RuntimeError(
+            "Production Kafka connections must use SSL or SASL_SSL"
+        )
+
+    # confluent-kafka accepts a comma-separated bootstrap server string directly.
+    configuration: dict[str, object] = {
+        "bootstrap.servers": str(KAFKA_BROKERS).strip(),
+        "security.protocol": KAFKA_SECURITY_PROTOCOL,
+    }
+
+    if not configuration["bootstrap.servers"]:
+        raise RuntimeError("KAFKA_BROKERS must contain at least one broker")
+
+    if uses_sasl:
+        mechanism = (KAFKA_SASL_MECHANISM or "").strip().upper()
+
+        if mechanism not in {"PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}:
+            raise RuntimeError(
+                "KAFKA_SASL_MECHANISM must be PLAIN, SCRAM-SHA-256, "
+                "or SCRAM-SHA-512"
+            )
+
+        if not (KAFKA_SASL_USERNAME or "").strip() or not KAFKA_SASL_PASSWORD:
+            raise RuntimeError(
+                "KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD are required "
+                "for SASL"
+            )
+
+        # These key names are defined by librdkafka, the native Kafka library
+        # used underneath Python's confluent-kafka package.
+        configuration["sasl.mechanism"] = mechanism
+        configuration["sasl.username"] = KAFKA_SASL_USERNAME
+        configuration["sasl.password"] = KAFKA_SASL_PASSWORD
+
+    if uses_tls and (KAFKA_SSL_CA_PATH or "").strip():
+        # The option is needed only when a broker uses a private certificate
+        # authority. Public managed services normally work with system trust.
+        certificate_path = Path(str(KAFKA_SSL_CA_PATH)).expanduser()
+
+        if not certificate_path.is_file():
+            raise RuntimeError("KAFKA_SSL_CA_PATH must point to a readable file")
+
+        configuration["ssl.ca.location"] = str(certificate_path)
+
+    return configuration
+
+
 def validate_runtime_configuration() -> None:
     """Reject incomplete worker configuration before consuming a Kafka job."""
     # These values are required in every environment. Checking them together at
@@ -143,7 +227,7 @@ def validate_runtime_configuration() -> None:
         "S3_ACCESS_KEY_ID": S3_ACCESS_KEY_ID,
         "S3_SECRET_ACCESS_KEY": S3_SECRET_ACCESS_KEY,
         "S3_BUCKET": S3_BUCKET,
-        "KAFKA_BROKER": KAFKA_BROKER,
+        "KAFKA_BROKERS": KAFKA_BROKERS,
         "KAFKA_JOB_CREATED_TOPIC": JOB_CREATED_TOPIC,
         "KAFKA_JOB_STATUS_TOPIC": JOB_STATUS_TOPIC,
         "KAFKA_CONSUMER_GROUP": KAFKA_CONSUMER_GROUP,
@@ -166,6 +250,26 @@ def validate_runtime_configuration() -> None:
     if PROCESSING_MODE not in {"mock", "demucs"}:
         raise RuntimeError("PROCESSING_MODE must be mock or demucs")
 
+    # Build once during validation so invalid security settings stop the worker
+    # before it joins the consumer group or claims any audio job.
+    build_kafka_client_configuration()
+
+    parsed_database_url = urlparse(str(DATABASE_URL))
+
+    if parsed_database_url.scheme not in {"postgres", "postgresql"}:
+        raise RuntimeError("DATABASE_URL must be a valid PostgreSQL URL")
+
+    if APP_ENV == "production":
+        # parse_qs turns `?sslmode=require` into a dictionary of value lists.
+        database_query = parse_qs(parsed_database_url.query)
+        ssl_mode = database_query.get("sslmode", [""])[0].lower()
+
+        if ssl_mode not in {"require", "verify-ca", "verify-full"}:
+            raise RuntimeError(
+                "DATABASE_URL must use sslmode=require, verify-ca, or "
+                "verify-full in production"
+            )
+
     # urlparse identifies the scheme without making a network request. Both HTTP
     # and HTTPS are allowed because private Docker-to-MinIO traffic uses HTTP.
     parsed_storage_endpoint = urlparse(str(S3_ENDPOINT))
@@ -174,3 +278,8 @@ def validate_runtime_configuration() -> None:
         or not parsed_storage_endpoint.netloc
     ):
         raise RuntimeError("S3_ENDPOINT must be an absolute HTTP or HTTPS URL")
+
+    if APP_ENV == "production" and parsed_storage_endpoint.scheme != "https":
+        # The local worker reaches online storage over the network. HTTPS keeps
+        # access keys and private audio encrypted while they travel.
+        raise RuntimeError("S3_ENDPOINT must use HTTPS in production")

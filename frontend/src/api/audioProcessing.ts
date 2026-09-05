@@ -10,6 +10,7 @@ import type {
   Job,
   JobHistoryResponse,
   PresignResponse,
+  WorkerAvailability,
 } from "../types";
 import { getApiErrorMessage } from "./apiErrors";
 
@@ -39,6 +40,18 @@ export async function fetchBackendHealth(): Promise<HealthResponse> {
 
   // Wait for the response body to be parsed, then describe its expected type.
   return (await response.json()) as HealthResponse;
+}
+
+export async function fetchWorkerAvailability(): Promise<WorkerAvailability> {
+  // This endpoint contains only aggregate counts. It never sends a worker's
+  // machine name, database details, Kafka credentials, or current job identity.
+  const response = await fetch(`${API_BASE_URL}/api/system/availability`);
+
+  if (!response.ok) {
+    throw new Error("Worker availability check failed");
+  }
+
+  return (await response.json()) as WorkerAvailability;
 }
 
 export async function requestPresignedUpload(

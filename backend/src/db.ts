@@ -5,7 +5,11 @@
  */
 import dotenv from "dotenv";
 import pg from "pg";
-import { requireEnvironmentVariable } from "./config/environment.js";
+import {
+  applicationEnvironment,
+  requireEnvironmentVariable,
+  validateDatabaseUrl,
+} from "./config/environment.js";
 
 // Load backend/.env during manual development. Docker supplies the same values
 // through docker-compose.yml, so no .env file is baked into the image.
@@ -13,8 +17,14 @@ dotenv.config();
 
 const { Pool } = pg;
 
+// Read and validate the connection string before constructing the pool. This
+// makes an unsafe production URL fail during startup instead of being discovered
+// after the first user request reaches PostgreSQL.
+const databaseUrl = requireEnvironmentVariable("DATABASE_URL");
+validateDatabaseUrl("DATABASE_URL", databaseUrl, applicationEnvironment);
+
 export const pool = new Pool({
   // DATABASE_URL contains the protocol, username, password, host, port, and
   // database name in one PostgreSQL connection string.
-  connectionString: requireEnvironmentVariable("DATABASE_URL"),
+  connectionString: databaseUrl,
 });
