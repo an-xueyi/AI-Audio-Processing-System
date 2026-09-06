@@ -17,7 +17,10 @@ RUN apt-get update \
     libopus-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+# requirements.txt refers to requirements-common.txt, so both must exist in the
+# image before pip resolves the complete Linux dependency set. The glob also
+# copies requirements-macos.txt as harmless documentation of the native setup.
+COPY requirements*.txt ./
 
 RUN pip install --no-cache-dir -r requirements.txt
 

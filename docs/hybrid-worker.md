@@ -54,6 +54,18 @@ reach them without exposing them to other computers. `-d` leaves the services
 running in the background, `--build` rebuilds changed application images, and
 `--scale backend=3` starts three API replicas behind Nginx.
 
+The local worker needs the native macOS dependency set once per virtual
+environment. From the worker directory, install it with:
+
+```bash
+python -m pip install -r requirements-macos.txt
+```
+
+`python -m pip` guarantees that packages enter the currently selected Python
+environment. `-r` asks pip to read every pinned package from the named file.
+The macOS file installs native Apple-silicon PyTorch, while Docker continues to
+use its separate Linux CPU build.
+
 The local worker can then be started in a separate terminal:
 
 ```bash

@@ -1,16 +1,7 @@
-boto3==1.43.49
-botocore==1.43.49
-confluent-kafka==2.15.0
-jmespath==1.1.0
-psycopg==3.3.4
-psycopg-binary==3.3.4
-python-dateutil==2.9.0.post0
-python-dotenv==1.2.2
-s3transfer==0.19.1
-six==1.17.0
-typing_extensions==4.16.0
-urllib3==2.7.0
+# Docker installs the shared service and Demucs dependencies first.
+-r requirements-common.txt
+
+# The Docker worker runs Linux. The PyTorch CPU index avoids downloading CUDA
+# libraries that cannot run inside this CPU-only container on an Apple Silicon Mac.
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.7.1+cpu
-numpy==1.26.4
-demucs==4.1.0

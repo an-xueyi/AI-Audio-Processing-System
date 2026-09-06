@@ -1,0 +1,6 @@
+# Install all service and Demucs libraries shared with the Docker worker.
+-r requirements-common.txt
+
+# Standard PyPI publishes the native macOS ARM64 wheel. Unlike the Linux Docker
+# pin, its version name has no `+cpu` suffix and can use Apple's MPS backend.
+torch==2.7.1
