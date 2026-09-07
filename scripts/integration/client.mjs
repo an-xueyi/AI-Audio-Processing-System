@@ -148,6 +148,22 @@ export async function fetchJob(session, jobId) {
   return readResponseJson(response, `Job ${jobId} lookup`);
 }
 
+export async function fetchDownloadUrls(session, jobId) {
+  // Completed result objects remain private. This request asks the backend to
+  // create short-lived read permissions for the session that owns the job.
+  const response = await fetch(
+    `${session.apiBaseUrl}/api/jobs/${jobId}/downloads`,
+    {
+      headers: apiHeaders(session.sessionCookie),
+    },
+  );
+
+  // Reuse the shared response parser so a failed ownership check or an
+  // unexpected proxy response produces the same useful error format as every
+  // other integration request.
+  return readResponseJson(response, `Job ${jobId} download-link request`);
+}
+
 export async function waitForJobs(
   session,
   jobIds,
