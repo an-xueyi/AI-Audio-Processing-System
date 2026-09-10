@@ -248,7 +248,8 @@ export function expireTestJobs(jobIds) {
   queryDatabase(
     `UPDATE jobs
      SET storage_expires_at = NOW()
-     WHERE id IN (${idList});`,
+     WHERE id IN (${idList})
+       AND status IN ('COMPLETED', 'FAILED', 'CANCELLED');`,
   );
 }
 

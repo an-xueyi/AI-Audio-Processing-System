@@ -66,7 +66,7 @@ export function useSelectedJob({
           }
 
           setDownloadUrls(urls);
-          onStatusMessage("Job completed! Download links are ready.");
+          onStatusMessage("Job completed! The separated stems are ready to play.");
         } catch (error) {
           // Apply the same stale-selection guard to error messages. Otherwise an
           // old failed request could replace a newer job's useful progress text.
@@ -77,7 +77,7 @@ export function useSelectedJob({
           onStatusMessage(
             error instanceof Error
               ? error.message
-              : "Job completed, but download links could not be loaded.",
+              : "Job completed, but the separated stems could not be loaded.",
           );
         }
         return;

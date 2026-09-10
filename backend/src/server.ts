@@ -196,24 +196,53 @@ app.use(errorHandler);
 const server = createServer(app);
 const jobUpdatesService = createJobUpdatesService(server);
 
+// Kafka may still be electing partitions when the HTTP server becomes ready.
+// Retrying the status consumer keeps that temporary startup ordering from
+// requiring a human to restart the complete backend container.
+const kafkaStatusRetryDelayMs = 5_000;
+let kafkaStatusRetryTimer: NodeJS.Timeout | null = null;
+let isShuttingDown = false;
+
+async function startJobStatusConsumerWithRetry() {
+  // Do not begin or schedule dependency work after graceful shutdown starts.
+  if (isShuttingDown) {
+    return;
+  }
+
+  try {
+    await startJobStatusConsumer(jobUpdatesService.notifyJobChanged);
+    logger.info("kafka_status_background_ready");
+  } catch (error) {
+    logger.error("kafka_status_background_start_failed", { error });
+
+    // Keep at most one retry timer. The callback clears its reference before
+    // trying again so another failure can schedule the following attempt.
+    if (!isShuttingDown && !kafkaStatusRetryTimer) {
+      kafkaStatusRetryTimer = setTimeout(() => {
+        kafkaStatusRetryTimer = null;
+        void startJobStatusConsumerWithRetry();
+      }, kafkaStatusRetryDelayMs);
+
+      // The HTTP and WebSocket servers keep the process alive. This retry timer
+      // alone should not prevent Node from exiting during an abnormal teardown.
+      kafkaStatusRetryTimer.unref();
+    }
+  }
+}
+
 // Begin accepting HTTP connections. The callback runs once the port is bound.
 server.listen(PORT, () => {
   logger.info("backend_started", { port: PORT });
 
-  // Start the Kafka status consumer before the outbox polling loop. `void` marks
-  // this Promise chain as intentionally started in the background.
-  void startJobStatusConsumer(jobUpdatesService.notifyJobChanged)
-    .then(() => {
-      // Start publishing only after the consumer is ready to hear status events.
-      startOutboxPublisher();
-    })
-    .catch((error) => {
-      logger.error("kafka_background_start_failed", { error });
-    });
+  /*
+   * Start the durable outbox independently from the status consumer. A temporary
+   * status-consumer failure may delay WebSocket notifications, which the browser
+   * can recover through database polling. It must not stop new job events from
+   * reaching workers, because that would leave jobs permanently PENDING.
+   */
+  startOutboxPublisher();
+  void startJobStatusConsumerWithRetry();
 });
-
-// This guard prevents SIGTERM and SIGINT from running shutdown simultaneously.
-let isShuttingDown = false;
 
 async function shutdown(signal: string) {
   // A second signal finds shutdown already active and exits this function.
@@ -223,6 +252,12 @@ async function shutdown(signal: string) {
 
   isShuttingDown = true;
   logger.info("backend_shutdown_requested", { signal });
+
+  // Cancel a scheduled reconnect before closing the Kafka client underneath it.
+  if (kafkaStatusRetryTimer) {
+    clearTimeout(kafkaStatusRetryTimer);
+    kafkaStatusRetryTimer = null;
+  }
 
   // Graceful cleanup should normally finish. This timer prevents a permanently
   // stuck dependency from leaving the container unable to terminate.

@@ -87,20 +87,6 @@ function App() {
         onStartProcessing={startProcessing}
       />
 
-      {/*
-        The backend health information becomes available before job-history
-        loading finishes. Showing the panel at that point lets the user see its
-        loading message instead of making the whole section suddenly appear.
-      */}
-      {backendHealth && (
-        <JobHistory
-          isLoading={isJobHistoryLoading}
-          jobs={jobHistory}
-          selectedJobId={job?.id ?? null}
-          onJobSelected={selectHistoryJob}
-        />
-      )}
-
       {/* `&&` conditionally renders job information only after a job exists. */}
       {/* The job value is known to be non-null inside this conditional branch. */}
       {job && (
@@ -110,8 +96,22 @@ function App() {
           onCancel={cancelJob}
         />
       )}
-      {/* Download links do not appear until the completed job returns them. */}
+      {/* Playable stems belong directly below the selected job that created them. */}
       {downloadUrls && <DownloadResults downloadUrls={downloadUrls} />}
+
+      {/*
+        History follows the current job and its results. This keeps the primary
+        workflow in reading order: upload, current processing state, playable
+        output, and then older jobs that the user may choose to reopen.
+      */}
+      {backendHealth && (
+        <JobHistory
+          isLoading={isJobHistoryLoading}
+          jobs={jobHistory}
+          selectedJobId={job?.id ?? null}
+          onJobSelected={selectHistoryJob}
+        />
+      )}
     </main>
   );
 }

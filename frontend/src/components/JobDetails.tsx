@@ -75,6 +75,15 @@ export function JobDetails({ isCancelling, job, onCancel }: JobDetailsProps) {
               </time>
             </p>
           )}
+        {/* Cancellation is a processing outcome, not a result-expiration state.
+            The uploaded source may remain briefly for automatic cleanup, but
+            the application never presents an incomplete stem as a usable result. */}
+        {job.status === "CANCELLED" && (
+          <p>
+            <strong>Results:</strong> No completed stems are available because
+            processing was cancelled
+          </p>
+        )}
         {/* Show worker error details only when the nullable field contains text. */}
         {job.error_message && (
           <p>

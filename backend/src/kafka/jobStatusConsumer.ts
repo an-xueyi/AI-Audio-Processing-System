@@ -97,10 +97,21 @@ export async function startJobStatusConsumer(
       });
 
       logger.info("job_status_consumer_started", { topic: jobStatusTopic });
-    })().catch((error) => {
-      // Allow a future start attempt after failed startup instead of preserving a
-      // permanently rejected Promise.
+    })().catch(async (error) => {
+      /*
+       * A startup attempt can connect successfully and then fail while reading
+       * topic metadata, especially when Kafka and the backend start together.
+       * Disconnect the partial client before allowing the supervisor to retry;
+       * otherwise a later connect can inherit ambiguous consumer state.
+       */
+      await consumer.disconnect().catch((disconnectError) => {
+        logger.warn("job_status_consumer_failed_start_cleanup", {
+          error: disconnectError,
+        });
+      });
+      // Allow a future start attempt instead of preserving a rejected Promise.
       startPromise = null;
+      runPromise = null;
       throw error;
     });
   }

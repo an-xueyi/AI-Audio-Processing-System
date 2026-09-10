@@ -82,11 +82,10 @@ function createSmallAudioObject(index) {
   );
 }
 
-export async function submitTestJob(session, index) {
-  const fileName = `distributed-test-${Date.now()}-${index}.mp3`;
-  const contentType = "audio/mpeg";
-  const audioBytes = createSmallAudioObject(index);
-
+export async function submitAudioBytes(
+  session,
+  { fileName, contentType, audioBytes },
+) {
   // Ask Express for temporary direct-to-storage upload permission. Only file
   // metadata crosses the backend in this request.
   const presignResponse = await fetch(
@@ -129,6 +128,16 @@ export async function submitTestJob(session, index) {
   });
 
   return readResponseJson(jobResponse, "Job creation");
+}
+
+export async function submitTestJob(session, index) {
+  const fileName = `distributed-test-${Date.now()}-${index}.mp3`;
+  const contentType = "audio/mpeg";
+  const audioBytes = createSmallAudioObject(index);
+
+  // The generic helper below is also used by the real Demucs verification with
+  // a valid WAV file. Mock checks keep their tiny MP3-shaped payload behavior.
+  return submitAudioBytes(session, { fileName, contentType, audioBytes });
 }
 
 export async function submitTestJobs(session, count) {
