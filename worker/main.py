@@ -2,6 +2,7 @@
 
 import json
 import signal
+import threading
 
 from confluent_kafka import Consumer, KafkaException
 
@@ -13,26 +14,29 @@ from config import (
     validate_runtime_configuration,
 )
 from job_handler import handle_job
-from kafka_partitions import (
-    on_partitions_assigned,
-    on_partitions_lost,
-    on_partitions_revoked,
-)
-from observability import log_info
+from kafka_partitions import PartitionAssignmentTracker
+from observability import log_error, log_info, log_warning
 from worker_presence import WorkerPresence
 
-# False means the process should continue polling Kafka. Signal handlers change
-# this shared flag instead of abruptly exiting inside the handler.
-shutdown_requested = False
+# Five seconds gives a restarting broker time to become available while keeping a
+# temporarily disconnected worker responsive. This delay also prevents a tight
+# loop from creating thousands of consumers when Kafka remains unavailable.
+KAFKA_RECONNECT_DELAY_SECONDS = 5
+
+# Event provides a thread-safe stop flag and an interruptible wait operation. It
+# starts unset, which means the worker should continue running.
+shutdown_event = threading.Event()
+
+
+class KafkaConsumerSessionLost(Exception):
+    """Signal that the current Kafka consumer must be closed and replaced."""
 
 
 def request_shutdown(signal_number, _frame) -> None:
     """Record a stop request while allowing the active job to finish safely."""
-    # global is required because assignment would otherwise create a local variable.
-    global shutdown_requested
-    # Signal handlers should do very little work. Setting a flag lets the normal
+    # Signal handlers should do very little work. Setting the Event lets normal
     # control flow finish the active job and close Kafka cleanly.
-    shutdown_requested = True
+    shutdown_event.set()
     log_info(
         "worker_shutdown_requested",
         signalNumber=signal_number,
@@ -41,7 +45,8 @@ def request_shutdown(signal_number, _frame) -> None:
 
 def is_shutdown_requested() -> bool:
     """Give job_handler a callback for reading current shutdown state."""
-    return shutdown_requested
+    # is_set() becomes True after SIGINT or SIGTERM calls request_shutdown().
+    return shutdown_event.is_set()
 
 
 def create_consumer() -> Consumer:
@@ -73,6 +78,70 @@ def create_consumer() -> Consumer:
     return Consumer(consumer_configuration)
 
 
+def run_consumer_session(consumer: Consumer, presence: WorkerPresence) -> None:
+    """Poll jobs until shutdown or until this Kafka consumer must be replaced."""
+    # Each consumer session receives its own one-shot assignment tracker. A new
+    # session must not inherit a loss signal from an older consumer.
+    assignment_tracker = PartitionAssignmentTracker()
+
+    # Rebalance callbacks describe Kafka's distribution decisions and tell this
+    # loop when the broker has permanently rejected the current membership.
+    consumer.subscribe(
+        [JOB_CREATED_TOPIC],
+        on_assign=assignment_tracker.on_assigned,
+        on_revoke=assignment_tracker.on_revoked,
+        on_lost=assignment_tracker.on_lost,
+    )
+    log_info("kafka_consumer_session_started", kafkaTopic=JOB_CREATED_TOPIC)
+
+    # Keep requesting Kafka messages until a signal changes the shared Event.
+    while not shutdown_event.is_set():
+        # poll waits at most one second for a message. The timeout allows the loop
+        # to notice shutdown_event even when the Kafka topic is quiet.
+        message = consumer.poll(1.0)
+
+        # Rebalance callbacks run inside poll(). Check their signal before using a
+        # returned message because this consumer may no longer own its partition.
+        if assignment_tracker.consume_loss_signal():
+            raise KafkaConsumerSessionLost(
+                "Kafka reported that this consumer lost its partition assignment"
+            )
+
+        if message is None:
+            # A timeout with no message is normal; restart the loop and poll again.
+            continue
+
+        if message.error():
+            # The supervisor in main() will replace this failed Kafka consumer.
+            raise KafkaException(message.error())
+
+        # Kafka returns bytes. Decode UTF-8 text, then parse that JSON text into
+        # the Python dictionary expected by handle_job.
+        job = json.loads(message.value().decode("utf-8"))
+        # Do not log the complete event because it contains the user's file name
+        # and private object key. jobId is sufficient for correlation.
+        job_id = job["jobId"]
+        log_info("kafka_job_received", jobId=job_id)
+
+        # BUSY starts when the worker accepts a Kafka message, including time
+        # waiting to claim a stale lease. finally restores IDLE after every
+        # success, skip, cancellation, failure, or raised exception.
+        presence.mark_busy(job_id)
+        try:
+            message_was_handled = handle_job(job, is_shutdown_requested)
+        finally:
+            presence.mark_idle()
+
+        # False means shutdown arrived before the message could be completed.
+        if not message_was_handled:
+            return
+
+        # A synchronous commit waits for Kafka to confirm the saved offset. The
+        # next message is not accepted as finished until that succeeds.
+        consumer.commit(message=message, asynchronous=False)
+        log_info("kafka_offset_committed", jobId=job_id)
+
+
 def main() -> None:
     # Validate all external-service settings before joining the Kafka group. A
     # misconfigured worker therefore becomes visibly unhealthy without claiming
@@ -83,66 +152,47 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
 
-    # Build one consumer and one independent registry heartbeat for this process.
-    consumer = create_consumer()
+    # WorkerPresence owns the PostgreSQL heartbeat for the lifetime of this
+    # process. Kafka consumers may now be replaced without losing that identity.
     presence = WorkerPresence()
     presence.start()
+    log_info("worker_started", kafkaTopic=JOB_CREATED_TOPIC)
 
     try:
-        # Rebalance callbacks make Kafka's distribution decisions visible without
-        # changing which worker Kafka assigns to each partition.
-        consumer.subscribe(
-            [JOB_CREATED_TOPIC],
-            on_assign=on_partitions_assigned,
-            on_revoke=on_partitions_revoked,
-            on_lost=on_partitions_lost,
-        )
-        log_info("worker_started", kafkaTopic=JOB_CREATED_TOPIC)
-
-        # Keep requesting Kafka messages until a signal changes the shared flag.
-        while not shutdown_requested:
-            # poll waits at most one second for a message. The timeout allows the
-            # loop to notice shutdown_requested even when the topic is quiet.
-            message = consumer.poll(1.0)
-
-            if message is None:
-                # A timeout with no message is normal; restart the loop and poll again.
-                continue
-
-            if message.error():
-                # Broker/partition errors require the outer finally to close the consumer.
-                raise KafkaException(message.error())
-
-            # Kafka returns bytes. Decode UTF-8 text, then parse that JSON text
-            # into the Python dictionary expected by handle_job.
-            job = json.loads(message.value().decode("utf-8"))
-            # Do not log the complete event because it contains the user's file
-            # name and private object key. jobId is sufficient for correlation.
-            job_id = job["jobId"]
-            log_info("kafka_job_received", jobId=job_id)
-
-            # BUSY starts when the worker accepts a Kafka message, including time
-            # waiting to claim a stale lease. finally restores IDLE after every
-            # success, skip, cancellation, failure, or raised exception.
-            presence.mark_busy(job_id)
+        # This outer loop supervises replaceable Kafka sessions. The Python
+        # container stays alive while a temporary broker interruption is repaired.
+        while not shutdown_event.is_set():
+            consumer = create_consumer()
             try:
-                message_was_handled = handle_job(job, is_shutdown_requested)
+                run_consumer_session(consumer, presence)
+            except (KafkaConsumerSessionLost, KafkaException) as error:
+                # These errors describe the Kafka connection, not the audio job.
+                # Closing and replacing the client leaves queued jobs durable.
+                log_warning(
+                    "kafka_consumer_session_restarting",
+                    error=str(error),
+                    retryDelaySeconds=KAFKA_RECONNECT_DELAY_SECONDS,
+                )
             finally:
-                presence.mark_idle()
+                # close releases sockets and group membership belonging to this
+                # session. It does not commit an unfinished job message.
+                consumer.close()
 
-            # False means shutdown arrived before the message could be completed.
-            if not message_was_handled:
-                break
-
-            # A synchronous commit waits for Kafka to confirm the saved offset.
-            # The next message is not accepted as finished until that succeeds.
-            consumer.commit(message=message, asynchronous=False)
-            log_info("kafka_offset_committed", jobId=job_id)
+            if not shutdown_event.is_set():
+                log_info(
+                    "kafka_consumer_reconnect_wait_started",
+                    delaySeconds=KAFKA_RECONNECT_DELAY_SECONDS,
+                )
+                # Event.wait acts like sleep, but a stop signal ends the wait early.
+                shutdown_event.wait(KAFKA_RECONNECT_DELAY_SECONDS)
+    except Exception as error:
+        # Unexpected programming or service errors should still end the process so
+        # Docker can report and restart a genuinely failed worker.
+        log_error("worker_failed", error=str(error))
+        raise
     finally:
-        # close leaves the consumer group and commits no additional messages.
-        consumer.close()
-        # Stop the heartbeat after Kafka is closed so this worker is no longer
-        # advertised as available once it has left the consumer group.
+        # Stop the heartbeat after every Kafka session is closed so this worker is
+        # no longer advertised as available once the process is shutting down.
         presence.stop()
         log_info("worker_shutdown_completed")
 

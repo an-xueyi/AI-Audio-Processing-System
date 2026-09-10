@@ -4,7 +4,6 @@ import {
   createSession,
   sleep,
   submitTestJobs,
-  waitForJobs,
 } from "./client.mjs";
 import {
   expireTestJobs,
@@ -15,6 +14,7 @@ import {
   waitForActiveWorkerCount,
 } from "./docker.mjs";
 import { assertProcessingEnvironmentIsIdle } from "./safety.mjs";
+import { connectJobWebSocket } from "./websocket-client.mjs";
 
 function readJobCount() {
   const configuredValue = process.env.INTEGRATION_JOB_COUNT || "9";
@@ -29,6 +29,7 @@ function readJobCount() {
 
 const jobCount = readJobCount();
 let session;
+let jobSockets = [];
 let jobIds = [];
 let testFailure;
 
@@ -44,7 +45,52 @@ try {
   jobIds = createdJobs.map((job) => job.id);
   console.log(`Submitted ${jobIds.length} jobs through the public API.`);
 
-  const completedJobs = await waitForJobs(session, jobIds);
+  /*
+   * The production protocol intentionally gives each connection one selected
+   * job, just like one frontend page has one current Created Job. Use one socket
+   * per simultaneous test job so every status stream remains independent. This
+   * still avoids HTTP polling and exercises the real ownership checks.
+   */
+  jobSockets = await Promise.all(
+    jobIds.map(() => connectJobWebSocket(session)),
+  );
+  const subscriptions = jobIds.map((jobId, index) => ({
+    jobId,
+    socket: jobSockets[index],
+    startIndex: jobSockets[index].subscribe(jobId),
+  }));
+
+  // Wait until the backend confirms every ownership-checked subscription. This
+  // proves the socket is authorized before terminal status messages are used.
+  await Promise.all(
+    subscriptions.map(({ jobId, socket, startIndex }) =>
+      socket.waitForMessage(
+        (message) =>
+          message.type === "subscribed" && message.jobId === jobId,
+        `the subscription for distributed test job ${jobId}`,
+        { startIndex },
+      ),
+    ),
+  );
+
+  // Mock jobs should finish quickly; two minutes leaves room for image startup,
+  // Kafka group rebalancing, and three sequential jobs on each worker.
+  const terminalMessages = await Promise.all(
+    subscriptions.map(({ jobId, socket, startIndex }) =>
+      socket.waitForMessage(
+        (message) =>
+          message.type === "job_update" &&
+          message.job.id === jobId &&
+          ["COMPLETED", "FAILED", "CANCELLED"].includes(message.job.status),
+        `a terminal update for distributed test job ${jobId}`,
+        {
+          startIndex,
+          timeoutMilliseconds: 2 * 60 * 1000,
+        },
+      ),
+    ),
+  );
+  const completedJobs = terminalMessages.map((message) => message.job);
   const nonCompletedJobs = completedJobs.filter(
     (job) => job.status !== "COMPLETED",
   );
@@ -101,6 +147,11 @@ try {
   testFailure = error;
   console.error(`Distributed processing verification failed: ${error.message}`);
 } finally {
+  // Stop receiving realtime updates before cleanup changes the test jobs.
+  for (const jobSocket of jobSockets) {
+    jobSocket.close();
+  }
+
   // Stop active temporary work before expiring its private storage. Each test
   // session is separate from the user's browser and never appears in its history.
   if (session) {
