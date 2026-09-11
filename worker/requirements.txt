@@ -4,4 +4,4 @@
 # The Docker worker runs Linux. The PyTorch CPU index avoids downloading CUDA
 # libraries that cannot run inside this CPU-only container on an Apple Silicon Mac.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1+cpu
+torch==2.10.0+cpu

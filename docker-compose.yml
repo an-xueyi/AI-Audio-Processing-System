@@ -71,7 +71,9 @@ services:
   # is sufficient for this project.
   cleanup:
     image: ai-audio-processing-backend:local
-    command: npm run cleanup
+    # The production image intentionally omits the npm command-line program.
+    # Start the already-compiled cleanup process directly with Node instead.
+    command: node dist/cleanup.js
     environment:
       APP_ENV: ${APP_ENV:-development}
       SERVICE_NAME: cleanup
@@ -162,7 +164,9 @@ services:
       MOCK_PROCESSING_DELAY_SECONDS: ${MOCK_PROCESSING_DELAY_SECONDS:-3.5}
       RESULT_RETENTION_HOURS: ${RESULT_RETENTION_HOURS:-168}
     volumes:
-      - demucs_model_cache:/root/.cache/torch
+      # Keep downloaded model weights between container replacements inside the
+      # unprivileged service account's home directory.
+      - demucs_model_cache:/home/audio-worker/.cache/torch
     depends_on:
       postgres:
         condition: service_healthy

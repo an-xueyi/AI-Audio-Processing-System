@@ -2,7 +2,7 @@
 
 A distributed web application for separating an uploaded song into vocals, drums, bass, guitar, piano, and other audio stems with Demucs. Large files travel directly from the browser to private S3-compatible object storage, while Kafka and containerized Python workers handle the machine-learning workload independently from the web application.
 
-The interface provides live processing progress, job recovery after a page refresh, cancellation controls, account-based history, and temporary download links for completed stems.
+The interface provides live processing progress, job recovery after a page refresh, cancellation controls, account-based history, and inline playback with temporary download links for completed stems.
 
 ## Using the Application
 
@@ -11,7 +11,7 @@ The interface provides live processing progress, job recovery after a page refre
 3. Choose **Upload and Create Job**.
 4. Follow the live processing status and percentage.
 5. Cancel an active job when processing is no longer needed.
-6. Download the completed vocals, drums, bass, guitar, piano, and other stems.
+6. Play the completed vocals, drums, bass, guitar, piano, and other stems on the page, or download individual WAV files.
 
 Download URLs are temporary. Signed-in users can recover their job history from another browser, while visitors receive an isolated signed browser session. Private uploads and generated stems expire automatically after the configured retention period, while retained job history remains visible to its owner.
 
@@ -67,6 +67,7 @@ Workers use leases and heartbeats so only one worker owns a job at a time. Kafka
 - Backend job, cancellation, download, and WebSocket operations verify that ownership before returning private information.
 - Passwords are stored as salted hashes, and authentication uses revocable server-side sessions rather than browser-stored account credentials.
 - Presigned upload and download URLs expire automatically and grant access only to a specific object operation.
+- Per-owner admission control prevents duplicate jobs and limits unfinished work before another large upload begins.
 - The transactional outbox keeps a committed database job from losing its Kafka processing event.
 - Worker leases, heartbeats, idempotent claims, and retry backoff support recovery from interrupted processing.
 - Original uploads and generated stems are deleted after their retention deadline or when their owner deletes the account.

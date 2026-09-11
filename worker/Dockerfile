@@ -24,6 +24,24 @@ COPY requirements*.txt ./
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY *.py ./
+# Create a service account that cannot administer the container operating
+# system. A compromised audio decoder or model process therefore receives the
+# worker's limited permissions instead of root privileges.
+RUN groupadd --system audio-worker \
+    && useradd --system \
+    --gid audio-worker \
+    --create-home \
+    --home-dir /home/audio-worker \
+    audio-worker
+
+# HOME tells PyTorch and Demucs where this account's persistent model cache
+# lives. Docker Compose mounts the named cache volume at the same directory.
+ENV HOME=/home/audio-worker
+
+# The service account owns application files so Python can read them without
+# granting it permission to modify system packages or operating-system files.
+COPY --chown=audio-worker:audio-worker *.py ./
+
+USER audio-worker
 
 CMD ["python", "main.py"]
