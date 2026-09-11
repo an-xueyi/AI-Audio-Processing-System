@@ -1,6 +1,7 @@
 /* HTTP routes for creating, reading, cancelling, and downloading owned jobs. */
 import { Router } from "express";
 import { z } from "zod";
+import { createActiveJobLimitMessage } from "../config/jobs.js";
 import { logger } from "../observability/logger.js";
 import {
   createResultDownloadUrls,
@@ -8,8 +9,10 @@ import {
   verifyOwnedAudioUpload,
 } from "../services/audioStorage.js";
 import {
+  ActiveJobLimitError,
   cancelJob,
   createJob,
+  DuplicateUploadJobError,
   findOwnedJob,
   findRecentOwnedJobs,
 } from "../services/jobService.js";
@@ -60,8 +63,36 @@ router.post("/", async (req, res) => {
     throw error;
   }
 
-  // The service performs the database job and outbox writes transactionally.
-  const job = await createJob(req.ownerId, originalFileName, inputObjectKey);
+  let job;
+
+  try {
+    // The service performs admission checks, the job insert, and the outbox
+    // insert under one race-safe database transaction.
+    job = await createJob(req.ownerId, originalFileName, inputObjectKey);
+  } catch (error) {
+    if (error instanceof DuplicateUploadJobError) {
+      // 409 Conflict means the JSON is valid but conflicts with an existing
+      // resource. Returning its ID helps a client locate the original job.
+      return res.status(409).json({
+        error: "This uploaded audio file already has a processing job.",
+        existingJobId: error.existingJob.id,
+        existingJobStatus: error.existingJob.status,
+      });
+    }
+
+    if (error instanceof ActiveJobLimitError) {
+      // The same wording is used by the presign route's early quota check.
+      return res.status(409).json({
+        error: createActiveJobLimitMessage(),
+        activeJobLimit: error.limit,
+      });
+    }
+
+    // Infrastructure and programming failures still belong to the central
+    // Express error handler, which records a request ID without leaking details.
+    throw error;
+  }
+
   logger.info("job_created", { jobId: job.id, status: job.status });
   // 201 Created is the correct success status for a new job resource.
   res.status(201).json(job);

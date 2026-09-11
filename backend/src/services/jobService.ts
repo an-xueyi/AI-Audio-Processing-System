@@ -1,5 +1,6 @@
 /* Keep PostgreSQL job operations and their transaction rules in one module. */
 import { pool } from "../db.js";
+import { maxActiveJobsPerOwner } from "../config/jobs.js";
 import { resultRetentionHours } from "../config/retention.js";
 import { jobCreatedTopic, jobStatusTopic } from "../kafka/topics.js";
 
@@ -28,6 +29,39 @@ const jobColumns = `id, original_file_name, input_object_key, status, progress,
 // load and serialize an unlimited number of old jobs in a single request.
 export const jobHistoryLimit = 20;
 
+// These expected errors represent valid requests that conflict with current
+// application state. Routes convert them into HTTP 409 responses; unexpected
+// database and programming errors continue to reach the central error handler.
+export class DuplicateUploadJobError extends Error {
+  constructor(public readonly existingJob: JobRecord) {
+    super("The uploaded audio already has a processing job");
+    this.name = "DuplicateUploadJobError";
+  }
+}
+
+export class ActiveJobLimitError extends Error {
+  constructor(public readonly limit: number) {
+    super(`The owner already has ${limit} active jobs`);
+    this.name = "ActiveJobLimitError";
+  }
+}
+
+export async function countActiveOwnedJobs(ownerId: string): Promise<number> {
+  // PENDING is waiting in Kafka, PROCESSING is owned by a worker, and RETRYING
+  // is waiting for another attempt. Terminal jobs no longer consume capacity.
+  const result = await pool.query<{ active_job_count: number }>(
+    `SELECT COUNT(*)::integer AS active_job_count
+     FROM jobs
+     WHERE owner_id = $1
+       AND status IN ('PENDING', 'PROCESSING', 'RETRYING')`,
+    [ownerId],
+  );
+
+  // COUNT always returns one row. The fallback protects application code if a
+  // test double or unexpected driver response omits that row.
+  return result.rows[0]?.active_job_count ?? 0;
+}
+
 export async function createJob(
   ownerId: string,
   originalFileName: string,
@@ -39,6 +73,52 @@ export async function createJob(
   try {
     // BEGIN groups later statements into one all-or-nothing database transaction.
     await client.query("BEGIN");
+
+    /*
+     * An advisory lock is a named PostgreSQL lock that lasts until this
+     * transaction commits or rolls back. Hashing ownerId converts its UUID text
+     * into the 64-bit integer accepted by PostgreSQL. Creation requests for the
+     * same owner now wait for one another, while different owners continue in
+     * parallel. This prevents two simultaneous requests from both observing one
+     * remaining queue slot and creating more work than the configured limit.
+     */
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [ownerId],
+    );
+
+    // Check duplication while holding the same owner lock. The object key is a
+    // private UUID-based upload identifier, so one upload should map to one job.
+    const duplicateResult = await client.query<JobRecord>(
+      `SELECT ${jobColumns}
+       FROM jobs
+       WHERE owner_id = $1 AND input_object_key = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [ownerId, inputObjectKey],
+    );
+    const existingJob = duplicateResult.rows[0];
+
+    if (existingJob) {
+      // Throwing transfers control to catch, which rolls back and releases the
+      // advisory lock without inserting another job or Kafka outbox event.
+      throw new DuplicateUploadJobError(existingJob);
+    }
+
+    const activeCountResult = await client.query<{ active_job_count: number }>(
+      `SELECT COUNT(*)::integer AS active_job_count
+       FROM jobs
+       WHERE owner_id = $1
+         AND status IN ('PENDING', 'PROCESSING', 'RETRYING')`,
+      [ownerId],
+    );
+    const activeJobCount = activeCountResult.rows[0]?.active_job_count ?? 0;
+
+    if (activeJobCount >= maxActiveJobsPerOwner) {
+      // The transaction owns the per-owner lock until catch rolls it back, so no
+      // second request can pass this same count check concurrently.
+      throw new ActiveJobLimitError(maxActiveJobsPerOwner);
+    }
 
     // $1, $2, and $3 are PostgreSQL placeholders. The separate values array lets
     // pg escape user data safely instead of inserting it into SQL source text.

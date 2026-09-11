@@ -8,11 +8,16 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Router } from "express";
 import { z } from "zod";
 import {
+  createActiveJobLimitMessage,
+  maxActiveJobsPerOwner,
+} from "../config/jobs.js";
+import {
   allowedAudioContentTypes,
   hasAllowedAudioExtension,
   maxUploadBytes,
 } from "../config/upload.js";
 import { logger } from "../observability/logger.js";
+import { countActiveOwnedJobs } from "../services/jobService.js";
 import { s3PublicClient, bucketName } from "../storage/s3.js";
 
 const router = Router();
@@ -53,6 +58,21 @@ router.post("/presign", async (req, res) => {
   if (!hasAllowedAudioExtension(fileName)) {
     return res.status(400).json({
       error: "Supported file extensions are MP3, WAV, FLAC, M4A, AAC, and OGG",
+    });
+  }
+
+  /*
+   * Check capacity before granting upload permission. This early check avoids
+   * transferring a large file that cannot currently become a processing job.
+   * createJob repeats the check inside its transaction because another request
+   * could create a job after this read and before this upload finishes.
+   */
+  const activeJobCount = await countActiveOwnedJobs(req.ownerId);
+
+  if (activeJobCount >= maxActiveJobsPerOwner) {
+    return res.status(409).json({
+      error: createActiveJobLimitMessage(),
+      activeJobLimit: maxActiveJobsPerOwner,
     });
   }
 

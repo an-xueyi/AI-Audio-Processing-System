@@ -30,6 +30,8 @@ services:
       KAFKA_JOB_CREATED_TOPIC: audio.jobs.created
       KAFKA_JOB_STATUS_TOPIC: audio.jobs.status
       KAFKA_STATUS_CONSUMER_GROUP_PREFIX: audio-backend-status
+      # Bound expensive unfinished work per account or private visitor session.
+      MAX_ACTIVE_JOBS_PER_OWNER: ${MAX_ACTIVE_JOBS_PER_OWNER:-2}
       OUTBOX_PUBLISH_INTERVAL_MS: 500
       SESSION_SECRET: ${SESSION_SECRET:?required}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}

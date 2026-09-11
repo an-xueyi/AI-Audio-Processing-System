@@ -6,6 +6,7 @@ import {
   parseBooleanEnvironmentVariable,
   validateDatabaseUrl,
 } from "../src/config/environment.js";
+import { parseMaxActiveJobsPerOwner } from "../src/config/jobs.js";
 import { createKafkaClientConfiguration } from "../src/kafka/clientConfiguration.js";
 import { readSecurityConfiguration } from "../src/config/security.js";
 
@@ -21,6 +22,20 @@ test("boolean configuration rejects spelling mistakes", () => {
     () => parseBooleanEnvironmentVariable("COOKIE_SECURE", "yes", false),
     /true or false/,
   );
+});
+
+test("active-job capacity uses its default only when configuration is absent", () => {
+  assert.equal(parseMaxActiveJobsPerOwner(undefined), 2);
+  assert.equal(parseMaxActiveJobsPerOwner("4"), 4);
+});
+
+test("active-job capacity rejects values that cannot be safe limits", () => {
+  for (const invalidValue of ["0", "-1", "1.5", "many"]) {
+    assert.throws(
+      () => parseMaxActiveJobsPerOwner(invalidValue),
+      /must be a positive integer/,
+    );
+  }
 });
 
 test("development keeps the local browser defaults", () => {

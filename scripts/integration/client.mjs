@@ -86,6 +86,22 @@ export async function submitAudioBytes(
   session,
   { fileName, contentType, audioBytes },
 ) {
+  const permission = await requestUploadPermission(session, {
+    fileName,
+    contentType,
+    fileSize: audioBytes.length,
+  });
+  await uploadBytesToStorage(permission, { contentType, audioBytes });
+  return createJobForUpload(session, {
+    originalFileName: fileName,
+    inputObjectKey: permission.objectKey,
+  });
+}
+
+export async function requestUploadPermission(
+  session,
+  { fileName, contentType, fileSize },
+) {
   // Ask Express for temporary direct-to-storage upload permission. Only file
   // metadata crosses the backend in this request.
   const presignResponse = await fetch(
@@ -96,15 +112,20 @@ export async function submitAudioBytes(
       body: JSON.stringify({
         fileName,
         contentType,
-        fileSize: audioBytes.length,
+        fileSize,
       }),
     },
   );
-  const permission = await readResponseJson(
+  return readResponseJson(
     presignResponse,
     "Presigned upload permission",
   );
+}
 
+export async function uploadBytesToStorage(
+  permission,
+  { contentType, audioBytes },
+) {
   // Send bytes directly to MinIO through the signed URL. The URL is deliberately
   // never printed because it grants temporary write authorization.
   const uploadResponse = await fetch(permission.uploadUrl, {
@@ -116,14 +137,19 @@ export async function submitAudioBytes(
   if (!uploadResponse.ok) {
     throw new Error(`Direct storage upload failed with HTTP ${uploadResponse.status}`);
   }
+}
 
+export async function createJobForUpload(
+  session,
+  { originalFileName, inputObjectKey },
+) {
   // The small control request references the already uploaded private object.
   const jobResponse = await fetch(`${session.apiBaseUrl}/api/jobs`, {
     method: "POST",
     headers: apiHeaders(session.sessionCookie, true),
     body: JSON.stringify({
-      originalFileName: fileName,
-      inputObjectKey: permission.objectKey,
+      originalFileName,
+      inputObjectKey,
     }),
   });
 
